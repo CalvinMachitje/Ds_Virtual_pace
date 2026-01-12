@@ -1,15 +1,21 @@
+/* ==============================================
+   src/index.css - Global Styles with Tailwind + Custom Theme
+   ============================================== */
+
+/* 1. Google Fonts MUST come FIRST (CSS spec requirement: @import before everything else) */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Lora&display=swap');
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono&display=swap');
+
+/* Note: Removed duplicate plain Inter import — the first one already covers 400–800 weights */
+
+/* 2. Tailwind Directives - after all @imports */
 @tailwind base;
 @tailwind components;
 @tailwind utilities;
 
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&display=swap');
 
-@import url("https://fonts.googleapis.com/css2?family=Inter&display=swap");
-
-@import url("https://fonts.googleapis.com/css2?family=Lora&display=swap");
-
-@import url("https://fonts.googleapis.com/css2?family=Space+Mono&display=swap");
-
+/* 3. Custom base layer (variables, resets, etc.) */
 @layer base {
   :root {
     /* Dark navy theme - matching D's Virtual Space design */
@@ -61,6 +67,7 @@
     --shadow-card: 0 2px 8px hsl(0 0% 0% / 0.3);
     --shadow-card-hover: 0 8px 25px hsl(0 0% 0% / 0.4);
 
+    /* Sidebar & Chart variables */
     --sidebar-background: 220 40% 7%;
     --sidebar-foreground: 210 40% 98%;
     --sidebar-primary: 217 91% 60%;
@@ -69,22 +76,23 @@
     --sidebar-accent-foreground: 210 40% 98%;
     --sidebar-border: 220 25% 20%;
     --sidebar-ring: 217 91% 60%;
+
     --chart-1: 217 91% 60%;
     --chart-2: 199 95% 73%;
     --chart-3: 215 20% 65%;
     --chart-4: 215 16% 46%;
     --chart-5: 215 19% 34%;
-    --sidebar: 220 35% 12%;
+
+    /* Font families */
     --font-sans: 'Inter', ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, 'Noto Sans', sans-serif;
     --font-serif: 'Lora', ui-serif, Georgia, Cambria, 'Times New Roman', Times, serif;
     --font-mono: 'Space Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, 'Liberation Mono', 'Courier New', monospace;
+
+    /* Extra shadows (consolidated some duplicates) */
     --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.1);
     --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.1);
-    --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.2), 0 1px 2px -1px hsl(0 0% 0% / 0.2);
     --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.2), 0 8px 10px -1px hsl(0 0% 0% / 0.2);
     --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.4);
-    --tracking-normal: 0em;
-    --spacing: 0.25rem;
   }
 
   .dark {
@@ -124,34 +132,38 @@
     --sidebar-accent-foreground: 210 40% 98%;
     --sidebar-border: 220 25% 18%;
     --sidebar-ring: 217 91% 60%;
+
     --chart-1: 217 91% 60%;
     --chart-2: 199 95% 73%;
     --chart-3: 215 20% 65%;
     --chart-4: 215 16% 46%;
     --chart-5: 215 19% 34%;
-    --sidebar: 220 35% 10%;
+
+    /* Shadows in dark mode (you can adjust if needed) */
     --shadow-2xs: 0 1px 3px 0px hsl(0 0% 0% / 0.1);
     --shadow-xs: 0 1px 3px 0px hsl(0 0% 0% / 0.1);
     --shadow-sm: 0 1px 3px 0px hsl(0 0% 0% / 0.2), 0 1px 2px -1px hsl(0 0% 0% / 0.2);
-    --shadow: 0 1px 3px 0px hsl(0 0% 0% / 0.2), 0 1px 2px -1px hsl(0 0% 0% / 0.2);
     --shadow-md: 0 1px 3px 0px hsl(0 0% 0% / 0.2), 0 2px 4px -1px hsl(0 0% 0% / 0.2);
     --shadow-lg: 0 1px 3px 0px hsl(0 0% 0% / 0.2), 0 4px 6px -1px hsl(0 0% 0% / 0.2);
     --shadow-xl: 0 1px 3px 0px hsl(0 0% 0% / 0.2), 0 8px 10px -1px hsl(0 0% 0% / 0.2);
     --shadow-2xl: 0 1px 3px 0px hsl(0 0% 0% / 0.4);
   }
-}
 
-@layer base {
+  /* Global resets */
   * {
-    @apply border-border;
+    border-color: hsl(var(--border));
   }
 
   body {
-    @apply bg-background text-foreground font-sans antialiased;
-    font-family: 'Inter', sans-serif;
+    background-color: hsl(var(--background));
+    color: hsl(var(--foreground));
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
 }
 
+/* 4. Custom utilities */
 @layer utilities {
   .text-gradient {
     @apply bg-clip-text text-transparent;
@@ -171,12 +183,8 @@
   }
 
   @keyframes float {
-    0%, 100% {
-      transform: translateY(0);
-    }
-    50% {
-      transform: translateY(-10px);
-    }
+    0%, 100% { transform: translateY(0); }
+    50%      { transform: translateY(-10px); }
   }
 
   .animate-fade-up {
