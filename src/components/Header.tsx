@@ -9,9 +9,9 @@ const Header = () => {
     <header className="sticky top-0 z-50 w-full border-b border-border bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/60">
       <div className="container flex h-16 items-center justify-between">
         <div className="flex items-center gap-8">
-          <a href="/" className="flex items-center gap-2">
-            <span className="text-2xl font-bold text-primary">Skill</span>
-            <span className="text-2xl font-bold text-foreground">Hub</span>
+          <a href="/" className="flex items-center gap-1">
+            <span className="text-2xl font-bold text-primary">D's</span>
+            <span className="text-2xl font-bold text-foreground">Virtual Space</span>
           </a>
           
           <nav className="hidden md:flex items-center gap-6">
