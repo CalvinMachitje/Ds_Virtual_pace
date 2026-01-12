@@ -20,8 +20,8 @@ const footerLinks = {
   support: [
     "Help & Support",
     "Trust & Safety",
-    "Selling on SkillHub",
-    "Buying on SkillHub",
+    "Selling on D's Virtual Space",
+    "Buying on D's Virtual Space",
     "Community Standards",
   ],
 };
@@ -40,9 +40,9 @@ const Footer = () => {
       <div className="container">
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-12 mb-12">
           <div>
-            <a href="/" className="flex items-center gap-2 mb-6">
-              <span className="text-2xl font-bold text-primary">Skill</span>
-              <span className="text-2xl font-bold text-background">Hub</span>
+            <a href="/" className="flex items-center gap-1 mb-6">
+              <span className="text-2xl font-bold text-primary">D's</span>
+              <span className="text-2xl font-bold text-background">Virtual Space</span>
             </a>
             <p className="text-sm text-muted/80 mb-6">
               The world's largest marketplace for digital services. Find the perfect freelancer for your project.
@@ -102,7 +102,7 @@ const Footer = () => {
 
         <div className="pt-8 border-t border-muted/20 flex flex-col md:flex-row justify-between items-center gap-4">
           <p className="text-sm text-muted/60">
-            © 2026 SkillHub. All rights reserved.
+            © 2026 D's Virtual Space. All rights reserved.
           </p>
           <div className="flex items-center gap-6">
             <a href="#" className="text-sm text-muted/60 hover:text-primary transition-colors">
