@@ -1,15 +1,65 @@
 // src/pages/LoginPage.tsx
 import { useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Separator } from "@/components/ui/separator";
 import { Mail, Lock, Eye, EyeOff, ArrowLeft, Facebook, Chrome, Users } from "lucide-react";
-import { Link } from "react-router-dom"; // Add this for navigation
+import { Link } from "react-router-dom";
+import { useAuth } from "@/context/AuthContext";
+import { supabase } from "@/lib/supabase";
 
 export default function LoginPage() {
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+
+  const { signIn } = useAuth();
+  const navigate = useNavigate();
+
+  const handleLogin = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError(null);
+    setLoading(true);
+
+    if (!email.trim() || !password) {
+      setError("Please fill in both email and password");
+      setLoading(false);
+      return;
+    }
+
+    const { error: signInError } = await signIn(email, password);
+
+    if (signInError) {
+      setError(signInError.message);
+    } else {
+      navigate("/dashboard");
+    }
+
+    setLoading(false);
+  };
+
+  const handleOAuthSignIn = async (provider: "google" | "facebook") => {
+    setError(null);
+    setLoading(true);
+
+    const { error } = await supabase.auth.signInWithOAuth({
+      provider,
+      options: {
+        redirectTo: `${window.location.origin}/dashboard`,
+      },
+    });
+
+    if (error) {
+      setError(error.message);
+    }
+
+    setLoading(false);
+  };
 
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
@@ -28,6 +78,12 @@ export default function LoginPage() {
         </CardHeader>
 
         <CardContent className="space-y-5">
+          {error && (
+            <div className="bg-red-900/40 border border-red-700 text-red-200 px-4 py-3 rounded-md text-center">
+              {error}
+            </div>
+          )}
+
           {/* Email */}
           <div className="space-y-2">
             <Label htmlFor="email" className="text-slate-200">Email Address</Label>
@@ -37,6 +93,8 @@ export default function LoginPage() {
                 id="email"
                 placeholder="name@example.com"
                 type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
                 className="pl-11 bg-slate-800/60 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500"
               />
             </div>
@@ -50,6 +108,8 @@ export default function LoginPage() {
               <Input
                 id="password"
                 type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
                 className="pl-11 pr-11 bg-slate-800/60 border-slate-700 text-white focus:ring-blue-500"
               />
               <button
@@ -68,22 +128,38 @@ export default function LoginPage() {
             </Link>
           </div>
 
-          <Button className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-6 text-lg">
-            Log In
+          <Button
+            onClick={handleLogin}
+            disabled={loading}
+            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-6 text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {loading ? "Signing in..." : "Log In"}
           </Button>
 
           <div className="relative my-6">
             <Separator className="bg-slate-700" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <span className="bg-slate-900 px-4 text-xs text-slate-500 uppercase tracking-wider">or continue with</span>
+              <span className="bg-slate-900 px-4 text-xs text-slate-500 uppercase tracking-wider">
+                or continue with
+              </span>
             </div>
           </div>
 
           <div className="grid grid-cols-2 gap-4">
-            <Button variant="outline" className="border-slate-700 text-white hover:bg-slate-800">
+            <Button
+              variant="outline"
+              onClick={() => handleOAuthSignIn("facebook")}
+              disabled={loading}
+              className="border-slate-700 text-white hover:bg-slate-800"
+            >
               <Facebook className="mr-2 h-5 w-5" /> Facebook
             </Button>
-            <Button variant="outline" className="border-slate-700 text-white hover:bg-slate-800">
+            <Button
+              variant="outline"
+              onClick={() => handleOAuthSignIn("google")}
+              disabled={loading}
+              className="border-slate-700 text-white hover:bg-slate-800"
+            >
               <Chrome className="mr-2 h-5 w-5" /> Google
             </Button>
           </div>
