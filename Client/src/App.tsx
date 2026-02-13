@@ -23,7 +23,6 @@ import SignupPage from "./pages/Signup_Page";
 import ForgotPassword from "./pages/ForgotPassword";
 import NotFound from "./pages/NotFound";
 import Gigs from "./pages/Gigs";
-import CreateGig from "./pages/CreateGig";
 import GigDetail from "./pages/GigDetail";
 import Profile from "./pages/Profile";
 
@@ -31,6 +30,7 @@ import Profile from "./pages/Profile";
 import BuyerDashboard from "./pages/BuyerDashboard";
 import SellerDashboard from "./pages/SellerDashboard";
 import SellerProfile from "./pages/SellerProfile";
+import CreateGig from "./pages/CreateGig";
 import BookingPage from "./pages/BookingPage";
 import CategoryPage from "./pages/CategoryPage";
 import ManageBookings from "./pages/ManageBookings";
@@ -44,9 +44,7 @@ import { useAuth } from "@/context/AuthContext";
 
 const queryClient = new QueryClient();
 
-// ────────────────────────────────────────────────
 // Bottom Navigation Component (mobile)
-// ────────────────────────────────────────────────
 const BottomNav = () => {
   const location = useLocation();
   const currentPath = location.pathname;
@@ -55,18 +53,15 @@ const BottomNav = () => {
     { icon: Home, label: "Home", path: "/dashboard" },
     { icon: Search, label: "Search", path: "/Gigs" },
     { icon: Calendar, label: "Bookings", path: "/bookings" },
-    { icon: MessageSquare, label: "Messages", path: "/chat/" }, // prefix match
-    { icon: User, label: "Profile", path: "/profile/" },        // prefix match
+    { icon: MessageSquare, label: "Messages", path: "/chat/" },
+    { icon: User, label: "Profile", path: "/profile/" },
   ];
 
   return (
     <nav className="fixed bottom-0 left-0 right-0 z-50 bg-slate-950/90 backdrop-blur-lg border-t border-slate-800 md:hidden">
       <div className="flex items-center justify-around h-16 px-2">
         {navItems.map((item) => {
-          const isActive =
-            currentPath === item.path ||
-            currentPath.startsWith(item.path);
-
+          const isActive = currentPath === item.path || currentPath.startsWith(item.path);
           return (
             <Link
               key={item.path}
@@ -86,9 +81,7 @@ const BottomNav = () => {
   );
 };
 
-// ────────────────────────────────────────────────
 // Layout for all authenticated/protected pages
-// ────────────────────────────────────────────────
 const ProtectedLayout = () => {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col">
@@ -99,19 +92,13 @@ const ProtectedLayout = () => {
       {/* Mobile bottom navigation */}
       <BottomNav />
 
-      {/* Optional future desktop sidebar */}
-      {/* 
-      <aside className="hidden md:block fixed left-0 top-0 bottom-0 w-64 bg-slate-900/80 border-r border-slate-800 p-6">
-        Desktop sidebar content...
-      </aside>
-      */}
+      {/* Optional: Desktop sidebar */}
+      {/* <aside className="hidden md:block fixed left-0 top-0 bottom-0 w-64 bg-slate-900/80 border-r border-slate-800 p-6">Sidebar content...</aside> */}
     </div>
   );
 };
 
-// ────────────────────────────────────────────────
 // Protected Route Wrapper
-// ────────────────────────────────────────────────
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   const { session, loading } = useAuth();
 
@@ -124,15 +111,12 @@ const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
   }
 
   if (!session) {
-    return <Navigate to="/Login_Page" replace />;
+    return <Navigate to="/LoginPage" replace />;
   }
 
   return <>{children}</>;
 };
 
-// ────────────────────────────────────────────────
-// Main App Component
-// ────────────────────────────────────────────────
 const App = () => {
   const { session, userRole, loading } = useAuth();
 
@@ -151,18 +135,15 @@ const App = () => {
         <Sonner />
         <BrowserRouter>
           <Routes>
-            {/* ── Public / Pre-login Routes ── */}
-            <Route
-              path="/"
-              element={session ? <Navigate to="/dashboard" replace /> : <Index />}
-            />
+            {/* Public routes */}
+            <Route path="/" element={session ? <Navigate to="/dashboard" replace /> : <Index />} />
             <Route path="/Login_Page" element={<LoginPage />} />
             <Route path="/Signup_Page" element={<SignupPage />} />
             <Route path="/ForgotPassword" element={<ForgotPassword />} />
 
-            {/* ── Protected Routes (with layout + bottom nav) ── */}
+            {/* Protected routes with layout */}
             <Route element={<ProtectedRoute><ProtectedLayout /></ProtectedRoute>}>
-              {/* Role-based Dashboard */}
+              {/* Role-based dashboard */}
               <Route
                 path="/dashboard"
                 element={
@@ -170,14 +151,12 @@ const App = () => {
                 }
               />
 
-              {/* Marketplace & Core Features */}
+              {/* Marketplace & other protected pages */}
               <Route path="/Gigs" element={<Gigs />} />
               <Route path="/gig/:id" element={<GigDetail />} />
               <Route path="/create-gig" element={<CreateGig />} />
               <Route path="/profile/:username" element={<Profile />} />
               <Route path="/seller/:username" element={<SellerProfile />} />
-
-              {/* From mockups & previous work */}
               <Route path="/category/:slug" element={<CategoryPage />} />
               <Route path="/bookings" element={<ManageBookings />} />
               <Route path="/chat/:chatId" element={<ChatPage />} />
@@ -187,7 +166,7 @@ const App = () => {
               <Route path="/booking/:id" element={<BookingPage />} />
             </Route>
 
-            {/* ── 404 Catch-all ── */}
+            {/* 404 */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

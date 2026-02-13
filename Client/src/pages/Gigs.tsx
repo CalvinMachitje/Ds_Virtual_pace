@@ -1,60 +1,93 @@
-// src/pages/Gigs.tsx
-import { Input } from "@/components/ui/input";
-import { useState } from "react";
+// src/pages/Gigs.tsx (New file: List of available gigs for buyers)
+import { useQuery } from "@tanstack/react-query";
+import { Card, CardContent, CardFooter } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
+import { Briefcase, Star } from "lucide-react";
+import Skeleton from "react-loading-skeleton";
+import "react-loading-skeleton/dist/skeleton.css";
+import { supabase } from "@/lib/supabase";
+
+type Gig = {
+  id: string;
+  title: string;
+  description: string;
+  price: number;
+  category: string;
+  seller_name: string;
+  rating: number;
+  review_count: number;
+  image_url?: string;
+};
+
+const fetchGigs = async () => {
+  const { data, error } = await supabase
+    .from("gigs")
+    .select("id, title, description, price, category, seller_id (full_name as seller_name, rating, review_count)")
+    .order("created_at", { ascending: false });
+
+  if (error) throw error;
+  return data as unknown as Gig[] || [];
+};
 
 export default function Gigs() {
-  const [searchTerm, setSearchTerm] = useState("");
+  const { data: gigs = [], isLoading, error, refetch } = useQuery<Gig[]>({
+    queryKey: ["gigs"],
+    queryFn: fetchGigs,
+  });
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+        <p className="text-xl mb-4">Failed to load gigs</p>
+        <p className="text-slate-400 mb-6">{(error as Error).message}</p>
+        <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
+          Retry
+        </Button>
+      </div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-[hsl(var(--background))] pt-20 pb-16">
-      <div className="container mx-auto px-6">
-        {/* Search & Filters */}
-        <div className="mb-12 text-center">
-          <h1 className="text-4xl font-bold text-[hsl(var(--foreground))] mb-4">
-            Explore Freelance Services
-          </h1>
-          <p className="text-xl text-[hsl(var(--muted-foreground))] mb-8">
-            Find the perfect freelancer for your project
-          </p>
-
-          <div className="max-w-2xl mx-auto">
-            <Input
-              placeholder="Search services (e.g. logo design, website development)"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="bg-[hsl(var(--input))] border-[hsl(var(--border))] text-[hsl(var(--foreground))] h-14 text-lg shadow-[hsl(var(--shadow-md))]"
-            />
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+      <div className="max-w-6xl mx-auto">
+        <h1 className="text-4xl font-bold text-white mb-8">Available Gigs</h1>
+        {isLoading ? (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[...Array(6)].map((_, i) => (
+              <Skeleton key={i} height={300} className="rounded-xl" />
+            ))}
           </div>
-        </div>
-
-        {/* Gig Grid - will be dynamic later */}
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6">
-          {/* Repeatable Gig Card */}
-          {Array.from({ length: 12 }).map((_, i) => (
-            <div
-              key={i}
-              className="bg-[hsl(var(--card))] border border-[hsl(var(--border))] rounded-xl overflow-hidden shadow-[hsl(var(--shadow-card))] hover:shadow-[hsl(var(--shadow-card-hover))] transition-all duration-300 group"
-            >
-              <div className="h-48 bg-gradient-to-br from-slate-800 to-indigo-950 flex items-center justify-center">
-                {/* Gig thumbnail placeholder */}
-                <span className="text-6xl opacity-30">🎨</span>
-              </div>
-              <div className="p-5">
-                <h3 className="font-bold text-lg text-[hsl(var(--foreground))] mb-2 line-clamp-2 group-hover:text-[hsl(var(--primary))]">
-                  Professional Logo Design with Unlimited Revisions
-                </h3>
-                <div className="flex items-center gap-2 mb-3">
-                  <div className="w-8 h-8 rounded-full bg-slate-700" />
-                  <span className="text-sm text-[hsl(var(--muted-foreground))]">john_designer</span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-xl font-bold text-[hsl(var(--primary))]">From $25</span>
-                  <span className="text-sm text-[hsl(var(--muted-foreground))]">2 days</span>
-                </div>
-              </div>
-            </div>
-          ))}
-        </div>
+        ) : gigs.length === 0 ? (
+          <div className="text-center py-16 text-slate-400 bg-slate-900/40 rounded-xl border border-slate-800">
+            <Briefcase className="h-12 w-12 mx-auto mb-4 opacity-50" />
+            <p className="text-xl font-medium">No gigs available yet</p>
+            <p className="mt-2">Check back soon or search for specific services.</p>
+          </div>
+        ) : (
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {gigs.map((gig) => (
+              <Card key={gig.id} className="bg-slate-900/70 border-slate-700 hover:border-blue-600 transition-colors overflow-hidden">
+                <img
+                  src={gig.image_url || "/placeholder-gig.jpg"}
+                  alt={gig.title}
+                  className="w-full h-48 object-cover"
+                />
+                <CardContent className="p-6">
+                  <h3 className="text-xl font-semibold text-white mb-2">{gig.title}</h3>
+                  <p className="text-slate-300 text-sm mb-4 line-clamp-3">{gig.description}</p>
+                  <div className="flex items-center gap-2 mb-4">
+                    <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
+                    <span className="text-slate-300">{gig.rating.toFixed(1)} ({gig.review_count})</span>
+                  </div>
+                  <p className="text-blue-400 font-medium">${gig.price.toFixed(2)} / hr</p>
+                </CardContent>
+                <CardFooter className="p-6 pt-0">
+                  <Button className="w-full bg-blue-600 hover:bg-blue-700">View & Book</Button>
+                </CardFooter>
+              </Card>
+            ))}
+          </div>
+        )}
       </div>
     </div>
   );

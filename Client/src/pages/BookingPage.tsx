@@ -46,7 +46,7 @@ const BookingPage = () => {
                 <span className="px-2 py-1 bg-primary/10 text-primary text-xs font-medium rounded">
                   Email Management
                 </span>
-                <span className="text-sm text-muted-foreground">$25.00/hr</span>
+                <span className="text-sm text-muted-foreground">R250.00/hr</span>
               </div>
             </div>
           </div>
@@ -91,21 +91,21 @@ const BookingPage = () => {
         
         <div className="bg-card border border-border rounded-xl p-4 space-y-3">
           <div className="flex justify-between text-muted-foreground">
-            <span>Rate (2 hrs × $25.00)</span>
-            <span>$50.00</span>
+            <span>Rate (2 hrs × R250.00)</span>
+            <span>R500.00</span>
           </div>
           <div className="flex justify-between text-muted-foreground">
             <span>Service Fee</span>
-            <span>$5.00</span>
+            <span>R5.00</span>
           </div>
           <div className="flex justify-between text-muted-foreground">
             <span>Taxes</span>
-            <span>$0.00</span>
+            <span>R0.00</span>
           </div>
           <div className="border-t border-border pt-3 mt-3">
             <div className="flex justify-between">
               <span className="font-semibold text-foreground">Total</span>
-              <span className="text-xl font-bold text-primary">$55.00</span>
+              <span className="text-xl font-bold text-primary">R550.00</span>
             </div>
           </div>
         </div>
@@ -152,7 +152,7 @@ const BookingPage = () => {
           <Button size="lg" className="w-full text-lg gap-2">
             <CreditCard className="h-5 w-5" />
             Confirm and Pay
-            <span className="ml-1 px-2 py-0.5 bg-primary-foreground/20 rounded text-sm">$55.00</span>
+            <span className="ml-1 px-2 py-0.5 bg-primary-foreground/20 rounded text-sm">R550.00</span>
           </Button>
         </div>
       </div>
