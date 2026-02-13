@@ -1,0 +1,21 @@
+{
+  "name": "gig-connect",
+  "version": "1.0.0",
+  "description": "**URL**: https://lovable.dev/projects/REPLACE_WITH_PROJECT_ID",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/CalvinMachitje/gig-connect.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/CalvinMachitje/gig-connect/issues"
+  },
+  "homepage": "https://github.com/CalvinMachitje/gig-connect#readme"
+}
