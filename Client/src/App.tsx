@@ -156,7 +156,7 @@ const App = () => {
               <Route path="/gig/:id" element={<GigDetail />} />
               <Route path="/create-gig" element={<CreateGig />} />
               <Route path="/profile/:username" element={<Profile />} />
-              <Route path="/seller/:username" element={<SellerProfile />} />
+              <Route path="/seller-profile/" element={<SellerProfile />} />
               <Route path="/category/:slug" element={<CategoryPage />} />
               <Route path="/bookings" element={<ManageBookings />} />
               <Route path="/chat/:chatId" element={<ChatPage />} />
