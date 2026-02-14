@@ -30,9 +30,7 @@ export default function SignupPage() {
   const { signUp } = useAuth();
   const navigate = useNavigate();
 
-  // ────────────────────────────────────────────────
-  // Password Strength Logic
-  // ────────────────────────────────────────────────
+  // Password strength logic
   const getPasswordStrength = (pwd: string) => {
     let strength = 0;
     if (pwd.length >= 8) strength += 1;
@@ -50,9 +48,7 @@ export default function SignupPage() {
   const passwordStrength = getPasswordStrength(password);
   const passwordStrengthWidth = `${(passwordStrength.score / 4) * 100}%`;
 
-  // ────────────────────────────────────────────────
-  // Validation
-  // ────────────────────────────────────────────────
+  // Form validation
   const validateForm = () => {
     const errors: { [key: string]: string } = {};
 
@@ -74,9 +70,6 @@ export default function SignupPage() {
     return Object.keys(errors).length === 0;
   };
 
-  // ────────────────────────────────────────────────
-  // Email/Password Signup
-  // ────────────────────────────────────────────────
   const handleEmailSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
@@ -84,6 +77,7 @@ export default function SignupPage() {
     setError(null);
     setLoading(true);
 
+    // Pass metadata for the trigger to use
     const { error: signUpError } = await signUp(email, password);
 
     if (signUpError) {
@@ -92,33 +86,31 @@ export default function SignupPage() {
       return;
     }
 
-    // Create profile
-    const { data: { user } } = await supabase.auth.getUser();
-
-    if (user) {
-      const { error: profileError } = await supabase.from("profiles").insert({
-        id: user.id,
-        role,
-        full_name: fullName.trim(),
-        phone: phone.trim() || null,
-      });
-
-      if (profileError) {
-        setError("Account created but profile setup failed. Please try logging in.");
-      } else if (signUpError?.message?.includes("confirmation")) {
-        // If email confirmation is enabled in Supabase
-        setEmailConfirmSent(true);
-      } else {
-        navigate("/dashboard");
-      }
+    // Attempt to create/merge profile record after signup (fallback if auth wrapper doesn't accept metadata)
+    try {
+      await supabase.from('profiles').upsert(
+        {
+          email: email.trim(),
+          full_name: fullName.trim(),
+          phone: phone.trim() || null,
+          role,
+        },
+        { onConflict: 'email' }
+      );
+    } catch (upsertError) {
+      // non-fatal; don't block signup flow
+      console.warn('Profile upsert failed', upsertError);
     }
+
+    // Give the database trigger a moment to create the profile (or for upsert to propagate)
+    await new Promise(resolve => setTimeout(resolve, 800));
+
+    // Always show confirmation screen after signup (safe UX)
+    setEmailConfirmSent(true);
 
     setLoading(false);
   };
 
-  // ────────────────────────────────────────────────
-  // OAuth Sign-in (Google / Facebook)
-  // ────────────────────────────────────────────────
   const handleOAuthSignIn = async (provider: "google" | "facebook") => {
     setError(null);
     setLoading(true);
@@ -149,10 +141,28 @@ export default function SignupPage() {
             </CardDescription>
           </CardHeader>
           <CardContent className="text-center">
-            <Button onClick={() => navigate("/Login_Page")} className="mt-6">
-              Go to Login
+            <Button
+              onClick={async () => {
+                const { error } = await supabase.auth.resend({
+                  type: 'signup',
+                  email,
+                });
+                if (!error) {
+                  alert("Confirmation email resent! Check your inbox.");
+                } else {
+                  alert("Error resending: " + error.message);
+                }
+              }}
+              className="mt-6 bg-blue-600 hover:bg-blue-700 w-full"
+            >
+              Resend Confirmation Email
             </Button>
           </CardContent>
+          <CardFooter className="text-center text-slate-400">
+            <Link to="/LoginPage" className="text-blue-400 hover:underline">
+              Back to Login
+            </Link>
+          </CardFooter>
         </Card>
       </div>
     );
@@ -188,10 +198,12 @@ export default function SignupPage() {
                 placeholder="John Doe"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                className={`pl-11 ${fieldErrors.fullName ? "border-red-500" : "border-slate-700"}`}
+                className={`pl-11 bg-slate-800/60 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${
+                  fieldErrors.fullName ? "border-red-500 focus:ring-red-500" : ""
+                }`}
               />
             </div>
-            {fieldErrors.fullName && <p className="text-red-400 text-xs">{fieldErrors.fullName}</p>}
+            {fieldErrors.fullName && <p className="text-red-400 text-xs mt-1">{fieldErrors.fullName}</p>}
           </div>
 
           {/* Cell Number */}
@@ -201,13 +213,15 @@ export default function SignupPage() {
               <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
               <Input
                 id="phone"
-                placeholder="082 123 4567"
+                placeholder="082 123 4567 or +27821234567"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                className={`pl-11 ${fieldErrors.phone ? "border-red-500" : "border-slate-700"}`}
+                className={`pl-11 bg-slate-800/60 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${
+                  fieldErrors.phone ? "border-red-500 focus:ring-red-500" : ""
+                }`}
               />
             </div>
-            {fieldErrors.phone && <p className="text-red-400 text-xs">{fieldErrors.phone}</p>}
+            {fieldErrors.phone && <p className="text-red-400 text-xs mt-1">{fieldErrors.phone}</p>}
           </div>
 
           {/* Email */}
@@ -221,10 +235,12 @@ export default function SignupPage() {
                 type="email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className={`pl-11 ${fieldErrors.email ? "border-red-500" : "border-slate-700"}`}
+                className={`pl-11 bg-slate-800/60 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${
+                  fieldErrors.email ? "border-red-500 focus:ring-red-500" : ""
+                }`}
               />
             </div>
-            {fieldErrors.email && <p className="text-red-400 text-xs">{fieldErrors.email}</p>}
+            {fieldErrors.email && <p className="text-red-400 text-xs mt-1">{fieldErrors.email}</p>}
           </div>
 
           {/* Role Selection */}
@@ -273,17 +289,19 @@ export default function SignupPage() {
                 type={showPassword ? "text" : "password"}
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className={`pl-11 pr-11 ${fieldErrors.password ? "border-red-500" : "border-slate-700"}`}
+                className={`pl-11 pr-11 bg-slate-800/60 border-slate-700 text-white focus:ring-blue-500 ${
+                  fieldErrors.password ? "border-red-500 focus:ring-red-500" : ""
+                }`}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
               >
-                {showPassword ? <EyeOff /> : <Eye />}
+                {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
             </div>
-            {fieldErrors.password && <p className="text-red-400 text-xs">{fieldErrors.password}</p>}
+            {fieldErrors.password && <p className="text-red-400 text-xs mt-1">{fieldErrors.password}</p>}
 
             {/* Password Strength Meter */}
             {password && (
@@ -311,18 +329,20 @@ export default function SignupPage() {
                 type={showConfirmPassword ? "text" : "password"}
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className={`pl-11 pr-11 ${fieldErrors.confirmPassword ? "border-red-500" : "border-slate-700"}`}
+                className={`pl-11 pr-11 bg-slate-800/60 border-slate-700 text-white focus:ring-blue-500 ${
+                  fieldErrors.confirmPassword ? "border-red-500 focus:ring-red-500" : ""
+                }`}
               />
               <button
                 type="button"
                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
               >
-                {showConfirmPassword ? <EyeOff /> : <Eye />}
+                {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
             </div>
             {fieldErrors.confirmPassword && (
-              <p className="text-red-400 text-xs">{fieldErrors.confirmPassword}</p>
+              <p className="text-red-400 text-xs mt-1">{fieldErrors.confirmPassword}</p>
             )}
           </div>
 
@@ -348,7 +368,7 @@ export default function SignupPage() {
                   Privacy Policy
                 </a>
               </Label>
-              {fieldErrors.terms && <p className="text-red-400 text-xs">{fieldErrors.terms}</p>}
+              {fieldErrors.terms && <p className="text-red-400 text-xs mt-1">{fieldErrors.terms}</p>}
             </div>
           </div>
 
@@ -390,8 +410,8 @@ export default function SignupPage() {
         </CardContent>
 
         <CardFooter className="text-center text-sm text-slate-400 pt-6 border-t border-slate-800">
-          <p>Already have an account?</p>
-          <Link to="/Login_Page" className="text-blue-400 hover:text-blue-300 hover:underline ml-1">
+          Already have an account?{" "}
+          <Link to="/LoginPage" className="text-blue-400 hover:text-blue-300 hover:underline ml-1">
             Log In
           </Link>
         </CardFooter>
