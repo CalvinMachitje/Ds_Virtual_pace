@@ -7,7 +7,7 @@ import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { supabase } from "@/lib/supabase";
 import { Link } from "react-router-dom";
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import { Input } from "@/components/ui/input";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -18,7 +18,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
-import { useInView } from "react-intersection-observer";
 import { toast } from "sonner";
 
 type Gig = {
@@ -30,6 +29,7 @@ type Gig = {
   seller_name: string;
   rating: number;
   review_count: number;
+  available: boolean;
   image_url?: string;
   created_at: string;
 };
@@ -44,7 +44,7 @@ const fetchGigs = async ({ pageParam = 0 }: { pageParam?: number }) => {
     .from("gigs")
     .select(
       `
-      id, title, description, price, category, created_at, image_url,
+      id, title, description, price, category, created_at, image_url, available,
       profiles!seller_id (full_name, rating, review_count)
     `,
       { count: "exact" }
@@ -65,13 +65,6 @@ const fetchGigs = async ({ pageParam = 0 }: { pageParam?: number }) => {
     rating: gig.profiles?.rating || 0,
     review_count: gig.profiles?.review_count || 0,
   })) || [];
-
-  console.log("Fetched gigs page:", {
-    page: pageParam,
-    returned: data.length,
-    totalCount: count,
-    firstFew: data.slice(0, 2).map(g => ({ id: g.id, title: g.title }))
-  });
 
   return {
     gigs: data as Gig[],
@@ -101,19 +94,13 @@ export default function Gigs() {
 
   const allGigs = useMemo(() => data?.pages.flatMap(p => p.gigs) ?? [], [data]);
 
-  console.log("Current state:", {
-    isLoading,
-    allGigsCount: allGigs.length,
-    processedCount: allGigs.length, // will be same until filters added back
-    hasData: allGigs.length > 0
-  });
-
   // ────────────────────────────────────────────────
   // Search, Filter & Sort State
   // ────────────────────────────────────────────────
   const [searchTerm, setSearchTerm] = useState("");
   const [selectedCategory, setSelectedCategory] = useState<string | null>(null);
   const [sortOption, setSortOption] = useState<"newest" | "price-low" | "price-high" | "rating-high">("newest");
+  const [availabilityOnly, setAvailabilityOnly] = useState(false);
 
   const categories = useMemo(() => {
     return Array.from(new Set(allGigs.map(gig => gig.category)));
@@ -139,6 +126,10 @@ export default function Gigs() {
       result = result.filter(gig => gig.category === selectedCategory);
     }
 
+    if (availabilityOnly) {
+      result = result.filter(gig => gig.available);
+    }
+
     switch (sortOption) {
       case "price-low":
         result.sort((a, b) => a.price - b.price);
@@ -155,21 +146,29 @@ export default function Gigs() {
     }
 
     return result;
-  }, [allGigs, searchTerm, selectedCategory, sortOption]);
+  }, [allGigs, searchTerm, selectedCategory, sortOption, availabilityOnly]);
 
   // ────────────────────────────────────────────────
-  // Infinite Scroll
+  // Native Infinite Scroll
   // ────────────────────────────────────────────────
-  const { ref: loadMoreRef, inView } = useInView({
-    threshold: 0.1,
-    rootMargin: "200px",
-  });
+  const loadMoreRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
-    if (inView && hasNextPage && !isFetchingNextPage) {
-      fetchNextPage();
-    }
-  }, [inView, hasNextPage, isFetchingNextPage, fetchNextPage]);
+    if (!loadMoreRef.current) return;
+
+    const observer = new IntersectionObserver(
+      (entries) => {
+        if (entries[0].isIntersecting && hasNextPage && !isFetchingNextPage) {
+          fetchNextPage();
+        }
+      },
+      { root: null, rootMargin: "200px", threshold: 0.1 }
+    );
+
+    observer.observe(loadMoreRef.current);
+
+    return () => observer.disconnect();
+  }, [fetchNextPage, hasNextPage, isFetchingNextPage]);
 
   // ────────────────────────────────────────────────
   // Real-time updates
@@ -186,21 +185,18 @@ export default function Gigs() {
           filter: "status=eq.published",
         },
         (payload) => {
-          console.log("Realtime gig change:", payload);
-          if (payload.eventType === "INSERT") {
-            toast.success("New gig published!");
-          } else if (payload.eventType === "UPDATE") {
-            toast.info("A gig was updated");
-          } else if (payload.eventType === "DELETE") {
-            toast.info("A gig was removed");
-          }
+          if (payload.eventType === "INSERT") toast.success("New gig published!");
+          else if (payload.eventType === "UPDATE") toast.info("A gig was updated");
+          else if (payload.eventType === "DELETE") toast.info("A gig was removed");
+
           queryClient.invalidateQueries({ queryKey: ["gigs"] });
         }
       )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      // fire-and-forget removal so cleanup does not return a Promise
+      void supabase.removeChannel(channel);
     };
   }, [queryClient]);
 
@@ -208,7 +204,6 @@ export default function Gigs() {
   // Render
   // ────────────────────────────────────────────────
   if (error) {
-    console.error("Gigs query failed:", error);
     return (
       <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
         <p className="text-xl mb-4">Failed to load gigs</p>
@@ -219,6 +214,32 @@ export default function Gigs() {
       </div>
     );
   }
+
+  // Determine dynamic no results message
+  const noResultsMessage = () => {
+    if (searchTerm && !selectedCategory && !availabilityOnly) {
+      return `No gigs match your search for "${searchTerm}"`;
+    }
+    if (!searchTerm && selectedCategory && !availabilityOnly) {
+      return `No gigs found in category "${selectedCategory.replace(/_/g, " ")}"`;
+    }
+    if (!searchTerm && !selectedCategory && availabilityOnly) {
+      return "No available gigs at the moment";
+    }
+    if (searchTerm && selectedCategory && !availabilityOnly) {
+      return `No gigs found for "${searchTerm}" in "${selectedCategory.replace(/_/g, " ")}"`;
+    }
+    if (searchTerm && !selectedCategory && availabilityOnly) {
+      return `No available gigs match your search for "${searchTerm}"`;
+    }
+    if (!searchTerm && selectedCategory && availabilityOnly) {
+      return `No available gigs in category "${selectedCategory.replace(/_/g, " ")}"`;
+    }
+    if (searchTerm && selectedCategory && availabilityOnly) {
+      return `No available gigs match "${searchTerm}" in "${selectedCategory.replace(/_/g, " ")}"`;
+    }
+    return "No gigs found";
+  };
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
@@ -279,7 +300,15 @@ export default function Gigs() {
               </div>
             )}
 
-            {(searchTerm || selectedCategory) && (
+            <Badge
+              variant={availabilityOnly ? "default" : "outline"}
+              className="cursor-pointer px-3 py-1 text-sm"
+              onClick={() => setAvailabilityOnly(!availabilityOnly)}
+            >
+              Available Only
+            </Badge>
+
+            {(searchTerm || selectedCategory || availabilityOnly) && (
               <Button
                 variant="ghost"
                 size="sm"
@@ -288,6 +317,7 @@ export default function Gigs() {
                   setSearchTerm("");
                   setSelectedCategory(null);
                   setSortOption("newest");
+                  setAvailabilityOnly(false);
                 }}
               >
                 <X className="h-4 w-4 mr-1" /> Clear Filters
@@ -306,14 +336,7 @@ export default function Gigs() {
         ) : processedGigs.length === 0 ? (
           <div className="text-center py-16 text-slate-400 bg-slate-900/40 rounded-xl border border-slate-800">
             <Briefcase className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p className="text-xl font-medium">
-              {isLoading ? "Loading available gigs..." : "No gigs found"}
-            </p>
-            <p className="mt-2">
-              {isLoading
-                ? "Fetching services from our assistants..."
-                : "There are currently no published gigs matching your filters."}
-            </p>
+            <p className="text-xl font-medium">{noResultsMessage()}</p>
           </div>
         ) : (
           <>
@@ -356,7 +379,7 @@ export default function Gigs() {
                       </span>
                     </div>
                     <p className="text-slate-400 text-sm">
-                      by {gig.seller_name}
+                      by {gig.seller_name} {gig.available ? "(Available)" : "(Unavailable)"}
                     </p>
                   </CardContent>
                   <CardFooter className="p-6 pt-0">
