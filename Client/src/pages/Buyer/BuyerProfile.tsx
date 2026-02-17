@@ -1,6 +1,6 @@
 // src/pages/Buyer/BuyerProfile.tsx
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, MoreVertical, MessageSquare, Bookmark, Star, CheckCircle, Edit, Upload, X } from "lucide-react";
+import { ArrowLeft, MoreVertical, MessageSquare, Bookmark, Star, CheckCircle, Edit, Upload, X, Plus, Save, Clock, DollarSign, List, CreditCard } from "lucide-react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,20 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
+import { cn } from "@/lib/utils";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 
 type Profile = {
   id: string;
@@ -24,21 +38,32 @@ type Profile = {
   created_at: string;
   updated_at: string;
   is_verified?: boolean;
-  rating?: number;
-  review_count?: number;
-  services?: string[];
+  interests?: string[];
 };
 
-type Review = {
+type BookingSummary = {
   id: string;
-  rating: number;
-  comment?: string;
-  created_at: string;
-  reviewer: {
-    full_name: string;
-    avatar_url?: string;
-  };
+  gig_title: string;
+  seller_name: string;
+  status: string;
+  price: number;
+  date: string;
 };
+
+const INTEREST_SUGGESTIONS = [
+  "Virtual Assistance",
+  "Content Writing",
+  "Graphic Design",
+  "Social Media Management",
+  "Video Editing",
+  "Web Development",
+  "Translation",
+  "Data Entry",
+  "Customer Support",
+  "Admin Tasks",
+  "Creative Work",
+  "Marketing Help",
+];
 
 export default function BuyerProfile() {
   const { id } = useParams<{ id: string }>();
@@ -46,7 +71,12 @@ export default function BuyerProfile() {
   const navigate = useNavigate();
 
   const [profile, setProfile] = useState<Profile | null>(null);
-  const [reviews, setReviews] = useState<Review[]>([]);
+  const [recentBookings, setRecentBookings] = useState<BookingSummary[]>([]);
+  const [stats, setStats] = useState({
+    totalSpent: 0,
+    bookingsCompleted: 0,
+    activeBookings: 0,
+  });
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
@@ -55,6 +85,10 @@ export default function BuyerProfile() {
   const [editForm, setEditForm] = useState<Partial<Profile>>({});
   const [uploadingAvatar, setUploadingAvatar] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Interests edit state
+  const [openInterestPopover, setOpenInterestPopover] = useState(false);
+  const [interestInput, setInterestInput] = useState("");
 
   const isOwnProfile = user?.id === profile?.id;
 
@@ -70,62 +104,58 @@ export default function BuyerProfile() {
         setLoading(true);
         setError(null);
 
-        // 1. Fetch profile by full_name
+        // 1. Fetch profile
         const { data: profileData, error: profileError } = await supabase
           .from("profiles")
-          .select("id, full_name, role, bio, avatar_url, phone, created_at, updated_at, is_verified")
+          .select("id, full_name, role, bio, avatar_url, phone, created_at, updated_at, is_verified, interests")
           .eq("id", id)
-          .maybeSingle();
+          .single();
 
         if (profileError) throw profileError;
         if (!profileData) throw new Error("Profile not found");
 
-        // 2. Fetch reviews (with reviewer info)
-        const { data: reviewDataRaw, error: reviewsError } = await supabase
-          .from("reviews")
+        setProfile(profileData);
+        if (isOwnProfile) {
+          setEditForm({
+            full_name: profileData.full_name || "",
+            bio: profileData.bio || "",
+            phone: profileData.phone || "",
+            interests: profileData.interests || [],
+          });
+        }
+
+        // 2. Fetch recent bookings (last 5 completed or active)
+        const { data: bookingsData, error: bookingsError } = await supabase
+          .from("bookings")
           .select(`
-            id, rating, comment, created_at,
-            reviewer:profiles!reviewer_id (full_name, avatar_url)
+            id, status, price, created_at,
+            gig:gig_id (title),
+            seller:seller_id (full_name)
           `)
-          .eq("reviewed_id", profileData.id)
+          .eq("buyer_id", id)
+          .in("status", ["completed", "accepted", "in_progress"])
           .order("created_at", { ascending: false })
           .limit(5);
 
-        if (reviewsError) {
-          console.warn("Reviews fetch warning:", reviewsError);
-        }
+        if (bookingsError) throw bookingsError;
 
-        // Fix: reviewer is returned as array → take first item
-        const reviewsFixed: Review[] = (reviewDataRaw || []).map((r: any) => ({
-          id: r.id,
-          rating: r.rating,
-          comment: r.comment,
-          created_at: r.created_at,
-          reviewer: r.reviewer?.[0] || { full_name: "Anonymous", avatar_url: undefined },
+        const formattedBookings = (bookingsData || []).map((b: any) => ({
+          id: b.id,
+          gig_title: b.gig?.title || "Untitled Gig",
+          seller_name: b.seller?.full_name || "Unknown",
+          status: b.status,
+          price: b.price,
+          date: new Date(b.created_at).toLocaleDateString("en-ZA"),
         }));
 
-        // 3. Fetch services (gigs)
-        const { data: gigs, error: gigsError } = await supabase
-          .from("gigs")
-          .select("title")
-          .eq("seller_id", profileData.id)
-          .eq("status", "published");
+        setRecentBookings(formattedBookings);
 
-        if (gigsError) console.warn("Gigs fetch warning:", gigsError);
+        // 3. Calculate stats
+        const totalSpent = formattedBookings.reduce((sum, b) => sum + (b.price || 0), 0);
+        const completed = formattedBookings.filter(b => b.status === "completed").length;
+        const active = formattedBookings.filter(b => b.status !== "completed").length;
 
-        // 4. Calculate rating
-        const avgRating = reviewsFixed.length
-          ? reviewsFixed.reduce((sum, r) => sum + (r.rating || 0), 0) / reviewsFixed.length
-          : 0;
-
-        setProfile({
-          ...profileData,
-          rating: avgRating,
-          review_count: reviewsFixed.length || 0,
-          services: gigs?.map(g => g.title) || [],
-        });
-
-        setReviews(reviewsFixed);
+        setStats({ totalSpent, bookingsCompleted: completed, activeBookings: active });
       } catch (err: any) {
         console.error("Profile fetch error:", err);
         setError(err.message || "Failed to load profile");
@@ -136,7 +166,7 @@ export default function BuyerProfile() {
     };
 
     fetchProfileAndData();
-  }, [id]);
+  }, [id, isOwnProfile]);
 
   const handleEditToggle = () => {
     if (isEditing) {
@@ -148,6 +178,7 @@ export default function BuyerProfile() {
         full_name: profile?.full_name || "",
         bio: profile?.bio || "",
         phone: profile?.phone || "",
+        interests: profile?.interests || [],
       });
     }
   };
@@ -195,6 +226,22 @@ export default function BuyerProfile() {
     }
   };
 
+  const addInterest = (interest: string) => {
+    if (!interest.trim()) return;
+    const current = editForm.interests || [];
+    if (!current.includes(interest.trim())) {
+      setEditForm(prev => ({ ...prev, interests: [...current, interest.trim()] }));
+    }
+    setInterestInput("");
+  };
+
+  const removeInterest = (interest: string) => {
+    setEditForm(prev => ({
+      ...prev,
+      interests: (prev.interests || []).filter(i => i !== interest),
+    }));
+  };
+
   const handleSaveProfile = async () => {
     if (!user?.id || !profile) return;
 
@@ -205,6 +252,7 @@ export default function BuyerProfile() {
           full_name: editForm.full_name?.trim() || profile.full_name,
           bio: editForm.bio?.trim(),
           phone: editForm.phone?.trim(),
+          interests: editForm.interests || [],
         })
         .eq('id', user.id);
 
@@ -215,6 +263,7 @@ export default function BuyerProfile() {
         full_name: editForm.full_name?.trim() || prev!.full_name,
         bio: editForm.bio?.trim(),
         phone: editForm.phone?.trim(),
+        interests: editForm.interests || [],
       }));
 
       setIsEditing(false);
@@ -350,7 +399,7 @@ export default function BuyerProfile() {
           </div>
 
           {isEditing ? (
-            <div className="w-full max-w-md space-y-4 mb-6">
+            <div className="w-full max-w-md space-y-6 mb-8">
               <div>
                 <Label htmlFor="edit-fullName">Full Name</Label>
                 <Input
@@ -378,10 +427,84 @@ export default function BuyerProfile() {
                   name="bio"
                   value={editForm.bio || ""}
                   onChange={handleInputChange}
-                  className="bg-slate-800 border-slate-700 text-white min-h-[100px]"
+                  className="bg-slate-800 border-slate-700 text-white min-h-[120px]"
                   placeholder="Tell others about yourself..."
                 />
               </div>
+
+              {/* Interests multi-select + custom add */}
+              <div>
+                <Label>My Interests & Preferences</Label>
+                <div className="flex flex-wrap gap-2 mt-2 mb-3">
+                  {(editForm.interests || []).map((interest) => (
+                    <Badge
+                      key={interest}
+                      variant="secondary"
+                      className="bg-slate-700 text-white px-3 py-1 flex items-center gap-1"
+                    >
+                      {interest}
+                      <button
+                        onClick={() => removeInterest(interest)}
+                        className="ml-1 text-slate-300 hover:text-white"
+                      >
+                        ×
+                      </button>
+                    </Badge>
+                  ))}
+                </div>
+
+                <Popover open={openInterestPopover} onOpenChange={setOpenInterestPopover}>
+                  <PopoverTrigger asChild>
+                    <Button variant="outline" className="w-full justify-between bg-slate-800 border-slate-700 text-white">
+                      Add interest...
+                      <Plus className="h-4 w-4 opacity-70" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-80 p-0 bg-slate-900 border-slate-700">
+                    <Command>
+                      <CommandInput
+                        placeholder="Search or type new interest..."
+                        value={interestInput}
+                        onValueChange={setInterestInput}
+                        className="bg-slate-800 text-white border-0 focus:ring-0"
+                      />
+                      <CommandList>
+                        <CommandGroup heading="Suggestions">
+                          {INTEREST_SUGGESTIONS.filter(i =>
+                            i.toLowerCase().includes(interestInput.toLowerCase()) &&
+                            !(editForm.interests || []).includes(i)
+                          ).map((interest) => (
+                            <CommandItem
+                              key={interest}
+                              onSelect={() => {
+                                addInterest(interest);
+                                setOpenInterestPopover(false);
+                              }}
+                              className="cursor-pointer hover:bg-slate-800"
+                            >
+                              {interest}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                        {interestInput.trim() && !INTEREST_SUGGESTIONS.includes(interestInput.trim()) && (
+                          <CommandGroup>
+                            <CommandItem
+                              onSelect={() => {
+                                addInterest(interestInput.trim());
+                                setOpenInterestPopover(false);
+                              }}
+                              className="cursor-pointer hover:bg-slate-800"
+                            >
+                              Add custom: "{interestInput.trim()}"
+                            </CommandItem>
+                          </CommandGroup>
+                        )}
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
               <div className="flex gap-4">
                 <Button onClick={handleSaveProfile} className="flex-1 bg-green-600 hover:bg-green-700">
                   Save Changes
@@ -441,81 +564,81 @@ export default function BuyerProfile() {
           </CardContent>
         </Card>
 
-        {/* Services */}
+        {/* Interests */}
         <Card className="bg-slate-900/70 border-slate-700 mb-8 backdrop-blur-sm">
           <CardContent className="p-6">
-            <h2 className="text-2xl font-semibold text-white mb-4">Services Offered</h2>
-
-            {profile.services && profile.services.length > 0 ? (
-              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
-                {profile.services.map((service, index) => (
-                  <div
-                    key={index}
-                    className="bg-slate-800/60 p-4 rounded-lg text-center border border-slate-700 hover:border-blue-600 transition-colors"
+            <h2 className="text-2xl font-semibold text-white mb-4">My Interests & Preferences</h2>
+            {profile.interests && profile.interests.length > 0 ? (
+              <div className="flex flex-wrap gap-3">
+                {profile.interests.map((interest) => (
+                  <Badge
+                    key={interest}
+                    variant="secondary"
+                    className="bg-slate-800 text-slate-200 px-4 py-2 text-base"
                   >
-                    <p className="font-medium text-slate-200">{service}</p>
-                  </div>
+                    {interest}
+                  </Badge>
                 ))}
               </div>
             ) : (
               <p className="text-center text-slate-400 py-8 italic">
-                No services listed yet.
+                You haven't added any interests yet. Let sellers know what kind of help you're looking for!
               </p>
             )}
           </CardContent>
         </Card>
 
-        {/* Real Reviews */}
-        <Card className="bg-slate-900/70 border-slate-700 backdrop-blur-sm">
+        {/* Recent Bookings */}
+        <Card className="bg-slate-900/70 border-slate-700 mb-8 backdrop-blur-sm">
           <CardContent className="p-6">
-            <div className="flex items-center justify-between mb-4">
-              <h2 className="text-2xl font-semibold text-white">Client Reviews</h2>
-              <div className="flex items-center gap-2">
-                <Star className="h-5 w-5 text-yellow-400 fill-yellow-400" />
-                <span className="text-white font-semibold">
-                  {profile.rating?.toFixed(1) || "No ratings yet"}
-                </span>
-                <span className="text-slate-400">({profile.review_count || 0})</span>
-              </div>
-            </div>
-
-            {reviews.length > 0 ? (
-              <div className="space-y-6">
-                {reviews.map((review) => (
-                  <div key={review.id} className="border-b border-slate-800 pb-6 last:border-0 last:pb-0">
-                    <div className="flex items-start justify-between mb-3">
-                      <div className="flex items-center gap-3">
-                        <Avatar className="h-10 w-10">
-                          <AvatarImage src={review.reviewer.avatar_url} alt={review.reviewer.full_name} />
-                          <AvatarFallback>{review.reviewer.full_name?.[0] || "?"}</AvatarFallback>
-                        </Avatar>
-                        <div>
-                          <p className="font-medium text-white">{review.reviewer.full_name}</p>
-                          <p className="text-xs text-slate-400">
-                            {new Date(review.created_at).toLocaleDateString()}
-                          </p>
-                        </div>
-                      </div>
-                      <div className="flex gap-0.5">
-                        {[...Array(5)].map((_, i) => (
-                          <Star
-                            key={i}
-                            className={`h-4 w-4 ${
-                              i < review.rating ? "text-yellow-400 fill-yellow-400" : "text-slate-600"
-                            }`}
-                          />
-                        ))}
-                      </div>
+            <h2 className="text-2xl font-semibold text-white mb-4">Recent Bookings</h2>
+            {recentBookings.length > 0 ? (
+              <div className="space-y-4">
+                {recentBookings.map((b) => (
+                  <div key={b.id} className="flex items-center justify-between p-4 bg-slate-800/50 rounded-lg border border-slate-700">
+                    <div>
+                      <p className="font-medium text-white">{b.gig_title}</p>
+                      <p className="text-sm text-slate-400">with {b.seller_name}</p>
                     </div>
-                    <p className="text-slate-300">{review.comment || "No comment provided."}</p>
+                    <div className="text-right">
+                      <Badge variant={b.status === "completed" ? "default" : "secondary"}>
+                        {b.status.charAt(0).toUpperCase() + b.status.slice(1)}
+                      </Badge>
+                      <p className="text-sm text-emerald-400 mt-1">R{b.price.toFixed(2)}</p>
+                      <p className="text-xs text-slate-500">{b.date}</p>
+                    </div>
                   </div>
                 ))}
               </div>
             ) : (
               <p className="text-center text-slate-400 py-8 italic">
-                No reviews yet. Be the first to leave one!
+                No recent bookings yet. Start exploring gigs!
               </p>
             )}
+          </CardContent>
+        </Card>
+
+        {/* Stats */}
+        <Card className="bg-slate-900/70 border-slate-700 backdrop-blur-sm">
+          <CardContent className="p-6">
+            <h2 className="text-2xl font-semibold text-white mb-6">My Activity</h2>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-6">
+              <div className="bg-slate-800/50 p-6 rounded-xl text-center border border-slate-700">
+                <CreditCard className="h-10 w-10 mx-auto mb-3 text-emerald-400" />
+                <p className="text-3xl font-bold text-white">R{stats.totalSpent.toFixed(2)}</p>
+                <p className="text-sm text-slate-400 mt-1">Total Spent</p>
+              </div>
+              <div className="bg-slate-800/50 p-6 rounded-xl text-center border border-slate-700">
+                <List className="h-10 w-10 mx-auto mb-3 text-blue-400" />
+                <p className="text-3xl font-bold text-white">{stats.bookingsCompleted}</p>
+                <p className="text-sm text-slate-400 mt-1">Completed Bookings</p>
+              </div>
+              <div className="bg-slate-800/50 p-6 rounded-xl text-center border border-slate-700">
+                <Clock className="h-10 w-10 mx-auto mb-3 text-purple-400" />
+                <p className="text-3xl font-bold text-white">{stats.activeBookings}</p>
+                <p className="text-sm text-slate-400 mt-1">Active Bookings</p>
+              </div>
+            </div>
           </CardContent>
         </Card>
       </div>

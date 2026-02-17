@@ -7,11 +7,28 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { MessageSquare } from "lucide-react";
+import { MessageSquare, Plus, Bell, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
+import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 
 type Conversation = {
   id: string; // booking id
@@ -21,6 +38,21 @@ type Conversation = {
   last_message_time: string;
   unread_count: number;
   status: "pending" | "active" | "completed";
+};
+
+type Seller = {
+  id: string;
+  full_name: string;
+  avatar_url?: string;
+};
+
+type Message = {
+  id: string;
+  content: string;
+  created_at: string;
+  sender_id: string;
+  receiver_id: string;
+  booking_id?: string;   // ← added this line (optional, fixes the error)
 };
 
 const fetchBuyerConversations = async (buyerId: string): Promise<Conversation[]> => {
@@ -49,11 +81,36 @@ const fetchBuyerConversations = async (buyerId: string): Promise<Conversation[]>
   }));
 };
 
+const fetchSellers = async (search: string): Promise<Seller[]> => {
+  const { data, error } = await supabase
+    .from("profiles")
+    .select("id, full_name, avatar_url")
+    .eq("role", "seller")
+    .ilike("full_name", `%${search}%`)
+    .limit(10);
+
+  if (error) {
+    console.error("Seller search error:", error);
+    return [];
+  }
+
+  return data || [];
+};
+
 export default function BuyerMessagesPage() {
   const { user } = useAuth();
   const buyerId = user?.id;
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
   const [searchTerm, setSearchTerm] = useState("");
+  const [showNewChatModal, setShowNewChatModal] = useState(false);
+  const [newSellerId, setNewSellerId] = useState("");
+  const [newChatLoading, setNewChatLoading] = useState(false);
+  const [sellerSearch, setSellerSearch] = useState("");
+  const [sellerSearchResults, setSellerSearchResults] = useState<Seller[]>([]);
+  const [selectedSeller, setSelectedSeller] = useState<Seller | null>(null);
+  const [starterMessage, setStarterMessage] = useState("Hello! I'd like to discuss your gig.");
+  const [notifications, setNotifications] = useState<Message[]>([]); // For chat notifications
 
   const { data: conversations = [], isLoading, error } = useQuery<Conversation[]>({
     queryKey: ["buyer-conversations", buyerId],
@@ -61,7 +118,7 @@ export default function BuyerMessagesPage() {
     enabled: !!buyerId,
   });
 
-  // Listen for new messages to update unread count
+  // Listen for new messages to update unread count and notifications
   useEffect(() => {
     if (!buyerId) return;
 
@@ -76,13 +133,20 @@ export default function BuyerMessagesPage() {
           filter: `receiver_id=eq.${buyerId}`,
         },
         (payload) => {
+          // Correct typing: payload.new is the inserted message object
+          const newMessage = payload.new as Message;
+
           queryClient.setQueryData<Conversation[]>(["buyer-conversations", buyerId], (old = []) =>
             old.map((conv) =>
-              conv.id === payload.new.booking_id
+              conv.id === newMessage.booking_id   // ← now safe (booking_id is optional)
                 ? { ...conv, unread_count: (conv.unread_count || 0) + 1 }
                 : conv
             )
           );
+
+          // Add to notifications
+          setNotifications((prev) => [newMessage, ...prev]);
+          toast.info("New message received!");
         }
       )
       .subscribe();
@@ -92,9 +156,60 @@ export default function BuyerMessagesPage() {
     };
   }, [buyerId, queryClient]);
 
+  // Seller search autocomplete
+  useEffect(() => {
+    if (sellerSearch.trim().length < 2) {
+      setSellerSearchResults([]);
+      return;
+    }
+
+    const searchSellers = async () => {
+      const results = await fetchSellers(sellerSearch);
+      setSellerSearchResults(results);
+    };
+
+    searchSellers();
+  }, [sellerSearch]);
+
   const filteredConversations = conversations.filter((conv) =>
     conv.seller_name.toLowerCase().includes(searchTerm.toLowerCase())
   );
+
+  const handleStartNewChat = async () => {
+    if (!selectedSeller?.id) {
+      toast.error("Please select a seller");
+      return;
+    }
+
+    if (!starterMessage.trim()) {
+      toast.error("Please enter a starter message");
+      return;
+    }
+
+    setNewChatLoading(true);
+
+    try {
+      // Send starter message
+      const { error } = await supabase.from("messages").insert({
+        sender_id: user?.id,
+        receiver_id: selectedSeller.id,
+        content: starterMessage.trim(),
+      });
+
+      if (error) throw error;
+
+      toast.success("Conversation started!");
+      navigate(`/chat/${selectedSeller.id}`);
+      setShowNewChatModal(false);
+      setSelectedSeller(null);
+      setSellerSearch("");
+      setStarterMessage("Hello! I'd like to discuss your gig.");
+    } catch (err: any) {
+      toast.error("Failed to start chat: " + err.message);
+    } finally {
+      setNewChatLoading(false);
+    }
+  };
 
   if (error) {
     return (
@@ -113,7 +228,52 @@ export default function BuyerMessagesPage() {
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6">
       <div className="max-w-4xl mx-auto">
-        <h1 className="text-3xl font-bold text-white mb-2">Your Messages</h1>
+        <div className="flex items-center justify-between mb-2">
+          <h1 className="text-3xl font-bold text-white">Your Messages</h1>
+          <Popover>
+            <PopoverTrigger asChild>
+              <Button variant="ghost" className="relative text-slate-400 hover:text-white">
+                <Bell className="h-5 w-5" />
+                {notifications.length > 0 && (
+                  <Badge className="absolute -top-1 -right-1 bg-red-500 text-white text-xs px-1.5 py-0.5">
+                    {notifications.length}
+                  </Badge>
+                )}
+              </Button>
+            </PopoverTrigger>
+            <PopoverContent className="w-80 p-0 bg-slate-900/90 border-slate-700">
+              <div className="p-4 border-b border-slate-700">
+                <h3 className="font-semibold text-white">Notifications</h3>
+              </div>
+              <div className="max-h-64 overflow-y-auto">
+                {notifications.length === 0 ? (
+                  <p className="text-center text-slate-400 py-4">No new notifications</p>
+                ) : (
+                  notifications.map((notif) => (
+                    <div key={notif.id} className="p-4 border-b border-slate-700 last:border-0 hover:bg-slate-800">
+                      <p className="text-sm text-white line-clamp-2">{notif.content}</p>
+                      <p className="text-xs text-slate-400 mt-1">
+                        {new Date(notif.created_at).toLocaleTimeString()}
+                      </p>
+                    </div>
+                  ))
+                )}
+              </div>
+              {notifications.length > 0 && (
+                <div className="p-4 border-t border-slate-700">
+                  <Button 
+                    variant="ghost" 
+                    size="sm" 
+                    className="w-full text-slate-400 hover:text-white"
+                    onClick={() => setNotifications([])}
+                  >
+                    Clear All
+                  </Button>
+                </div>
+              )}
+            </PopoverContent>
+          </Popover>
+        </div>
         <p className="text-slate-400 mb-6">Manage your conversations with sellers</p>
 
         <div className="relative mb-6">
@@ -195,6 +355,71 @@ export default function BuyerMessagesPage() {
           </div>
         )}
       </div>
+
+      {/* Start New Conversation Modal */}
+      <Dialog open={showNewChatModal} onOpenChange={setShowNewChatModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Start New Conversation</DialogTitle>
+            <DialogDescription>
+              Search for a seller to begin chatting.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-4 py-4">
+            <Command className="bg-slate-900/60 border-slate-700">
+              <CommandInput 
+                placeholder="Search sellers by name..."
+                value={sellerSearch}
+                onValueChange={setSellerSearch}
+                className="text-white placeholder:text-slate-500"
+              />
+              <CommandList>
+                {sellerSearchResults.map((seller) => (
+                  <CommandItem
+                    key={seller.id}
+                    onSelect={() => {
+                      setSelectedSeller(seller);
+                      setSellerSearch(seller.full_name);
+                    }}
+                    className="flex items-center gap-3 hover:bg-slate-800 cursor-pointer"
+                  >
+                    <Avatar className="h-6 w-6">
+                      <AvatarImage src={seller.avatar_url} alt={seller.full_name} />
+                      <AvatarFallback>{seller.full_name?.[0]}</AvatarFallback>
+                    </Avatar>
+                    <span>{seller.full_name}</span>
+                  </CommandItem>
+                ))}
+              </CommandList>
+            </Command>
+            <Textarea
+              placeholder="Your starter message..."
+              value={starterMessage}
+              onChange={(e) => setStarterMessage(e.target.value)}
+              className="min-h-[100px] bg-slate-900/60 border-slate-700 text-white placeholder:text-slate-500"
+            />
+          </div>
+          <DialogFooter className="sm:justify-between">
+            <Button variant="outline" onClick={() => setShowNewChatModal(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleStartNewChat}
+              disabled={newChatLoading || !selectedSeller?.id || !starterMessage.trim()}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {newChatLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Starting...
+                </>
+              ) : (
+                "Send Message"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

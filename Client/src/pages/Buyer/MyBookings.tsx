@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 
 type Booking = {
   id: string;
@@ -37,6 +38,7 @@ type Booking = {
   requirements?: string;
   created_at: string;
   updated_at: string;
+  reviewed: boolean; // true if buyer already left a review for this booking
 };
 
 export default function MyBookings() {
@@ -48,7 +50,13 @@ export default function MyBookings() {
   const [cancelReason, setCancelReason] = useState("");
   const [reasonError, setReasonError] = useState("");
 
-  const { data, isLoading, error } = useQuery<Booking[], Error>({
+  // Review modal state
+  const [showReviewModal, setShowReviewModal] = useState(false);
+  const [selectedBooking, setSelectedBooking] = useState<Booking | null>(null);
+  const [rating, setRating] = useState(0);
+  const [comment, setComment] = useState("");
+
+  const { data: bookings = [], isLoading, error } = useQuery<Booking[], Error>({
     queryKey: ["my-bookings", user?.id],
     queryFn: async () => {
       if (!user?.id) throw new Error("Not logged in");
@@ -58,7 +66,8 @@ export default function MyBookings() {
         .select(`
           id, status, price, requirements, created_at, updated_at,
           gig:gig_id (id, title, price),
-          seller:seller_id (id, full_name)
+          seller:seller_id (id, full_name),
+          reviewed:reviews!booking_id (id)  -- subquery to check if review exists
         `)
         .eq("buyer_id", user.id)
         .order("created_at", { ascending: false });
@@ -72,17 +81,15 @@ export default function MyBookings() {
         requirements: r.requirements,
         created_at: r.created_at,
         updated_at: r.updated_at,
-        // Supabase may return related rows as arrays; normalize to single object
         gig: Array.isArray(r.gig) ? r.gig[0] : r.gig,
         seller: Array.isArray(r.seller) ? r.seller[0] : r.seller,
+        reviewed: !!r.reviewed?.length, // true if any review exists for this booking
       })) as Booking[];
 
       return normalized;
     },
     enabled: !!user?.id,
   });
-
-  const bookings: Booking[] = (data ?? []) as Booking[];
 
   // ────────────────────────────────────────────────
   // Real-time updates for booking status changes
@@ -163,6 +170,38 @@ export default function MyBookings() {
     },
   });
 
+  // ────────────────────────────────────────────────
+  // Submit review mutation
+  // ────────────────────────────────────────────────
+  const submitReview = useMutation({
+    mutationFn: async () => {
+      if (!selectedBooking || rating === 0 || !user?.id) {
+        throw new Error("Invalid review data");
+      }
+
+      const { error } = await supabase.from("reviews").insert({
+        booking_id: selectedBooking.id,
+        reviewer_id: user.id,
+        reviewed_id: selectedBooking.seller.id,
+        rating,
+        comment: comment.trim() || null,
+      });
+
+      if (error) throw error;
+    },
+    onSuccess: () => {
+      toast.success("Review submitted! Thank you.");
+      setShowReviewModal(false);
+      setRating(0);
+      setComment("");
+      setSelectedBooking(null);
+      queryClient.invalidateQueries({ queryKey: ["my-bookings", user?.id] });
+    },
+    onError: (err: any) => {
+      toast.error("Failed to submit review: " + (err.message || "Unknown error"));
+    },
+  });
+
   const handleCancelClick = (bookingId: string) => {
     setBookingToCancel(bookingId);
     setCancelReason("");
@@ -179,6 +218,17 @@ export default function MyBookings() {
     }
 
     cancelBooking.mutate({ bookingId: bookingToCancel, reason: cancelReason });
+  };
+
+  const openReviewModal = (booking: Booking) => {
+    if (booking.reviewed) {
+      toast.info("You have already reviewed this booking.");
+      return;
+    }
+    setSelectedBooking(booking);
+    setRating(0);
+    setComment("");
+    setShowReviewModal(true);
   };
 
   if (isLoading) {
@@ -267,19 +317,35 @@ export default function MyBookings() {
                     </div>
                   )}
 
-                  <div className="flex gap-3 pt-4">
-                    <Button variant="outline" size="sm" className="flex-1">
+                  <div className="flex gap-3 pt-4 flex-wrap">
+                    <Button variant="outline" size="sm" className="flex-1 min-w-[140px]">
                       <MessageSquare className="h-4 w-4 mr-2" />
                       Message Seller
                     </Button>
+
                     {booking.status === "pending" && (
                       <Button
                         variant="destructive"
                         size="sm"
-                        className="flex-1"
+                        className="flex-1 min-w-[140px]"
                         onClick={() => handleCancelClick(booking.id)}
                       >
                         Cancel Request
+                      </Button>
+                    )}
+
+                    {booking.status === "completed" && (
+                      <Button
+                        variant="default"
+                        size="sm"
+                        className={cn(
+                          "flex-1 min-w-[140px]",
+                          booking.reviewed ? "bg-slate-600 hover:bg-slate-700" : "bg-yellow-600 hover:bg-yellow-700"
+                        )}
+                        onClick={() => openReviewModal(booking)}
+                        disabled={booking.reviewed}
+                      >
+                        {booking.reviewed ? "Already Reviewed" : "Leave Review"}
                       </Button>
                     )}
                   </div>
@@ -290,7 +356,7 @@ export default function MyBookings() {
         )}
       </div>
 
-      {/* Cancel Confirmation Dialog with Reason Input */}
+      {/* Cancel Confirmation Dialog */}
       <Dialog open={cancelDialogOpen} onOpenChange={setCancelDialogOpen}>
         <DialogContent className="sm:max-w-md">
           <DialogHeader>
@@ -338,6 +404,69 @@ export default function MyBookings() {
                 </>
               ) : (
                 "Confirm Cancel"
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Review Submission Modal */}
+      <Dialog open={showReviewModal} onOpenChange={setShowReviewModal}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Rate Your Experience</DialogTitle>
+            <DialogDescription>
+              How would you rate {selectedBooking?.seller.full_name} for "{selectedBooking?.gig.title}"?
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="py-6 space-y-6">
+            {/* Star rating */}
+            <div className="flex justify-center gap-2 text-4xl">
+              {[1, 2, 3, 4, 5].map((star) => (
+                <button
+                  key={star}
+                  type="button"
+                  onClick={() => setRating(star)}
+                  className={cn(
+                    "transition-colors",
+                    star <= rating ? "text-yellow-400" : "text-slate-600 hover:text-yellow-400"
+                  )}
+                >
+                  ★
+                </button>
+              ))}
+            </div>
+
+            {/* Comment */}
+            <div>
+              <Label htmlFor="review-comment">Your feedback (optional)</Label>
+              <Textarea
+                id="review-comment"
+                placeholder="Tell us about your experience..."
+                value={comment}
+                onChange={(e) => setComment(e.target.value)}
+                className="min-h-[120px] bg-slate-900 border-slate-700 text-white placeholder:text-slate-500"
+              />
+            </div>
+          </div>
+
+          <DialogFooter className="sm:justify-between">
+            <Button variant="outline" onClick={() => setShowReviewModal(false)}>
+              Cancel
+            </Button>
+            <Button
+              onClick={() => submitReview.mutate()}
+              disabled={submitReview.isPending || rating === 0}
+              className="bg-blue-600 hover:bg-blue-700"
+            >
+              {submitReview.isPending ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Submitting...
+                </>
+              ) : (
+                "Submit Review"
               )}
             </Button>
           </DialogFooter>

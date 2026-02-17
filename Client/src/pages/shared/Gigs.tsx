@@ -26,6 +26,7 @@ type Gig = {
   description: string;
   price: number;
   category: string;
+  seller_id: string;
   seller_name: string;
   rating: number;
   review_count: number;
@@ -45,7 +46,7 @@ const fetchGigs = async ({ pageParam = 0 }: { pageParam?: number }) => {
     .select(
       `
       id, title, description, price, category, created_at, image_url, available,
-      profiles!seller_id (full_name, rating, review_count)
+      profiles!gigs_seller_id_fkey (full_name, rating, review_count)
     `,
       { count: "exact" }
     )
@@ -61,7 +62,7 @@ const fetchGigs = async ({ pageParam = 0 }: { pageParam?: number }) => {
   // Flatten nested profiles object
   const data = rawData?.map((gig: any) => ({
     ...gig,
-    seller_name: gig.profiles?.full_name || "Unknown Seller",
+    seller_name: gig.profiles?.full_name || "Unknown Seller",   // ← added
     rating: gig.profiles?.rating || 0,
     review_count: gig.profiles?.review_count || 0,
   })) || [];
@@ -118,7 +119,7 @@ export default function Gigs() {
         gig =>
           gig.title.toLowerCase().includes(term) ||
           gig.description.toLowerCase().includes(term) ||
-          gig.seller_name?.toLowerCase().includes(term)
+          gig.seller_name?.toLowerCase().includes(term)   // ← added seller name to search
       );
     }
 
@@ -379,7 +380,7 @@ export default function Gigs() {
                       </span>
                     </div>
                     <p className="text-slate-400 text-sm">
-                      by {gig.seller_name} {gig.available ? "(Available)" : "(Unavailable)"}
+                      by {gig.seller_name || "Seller"} {gig.available ? "(Available)" : "(Unavailable)"}
                     </p>
                   </CardContent>
                   <CardFooter className="p-6 pt-0">

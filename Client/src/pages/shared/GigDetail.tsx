@@ -15,13 +15,13 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
-import { Briefcase, Star, Loader2, MessageSquare, Calendar } from "lucide-react";
+import { Briefcase, Star, Loader2, MessageSquare, Calendar, User, CheckCircle2 } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { Avatar, AvatarFallback } from "@/components/ui/avatar";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 
 type Gig = {
   id: string;
@@ -31,6 +31,8 @@ type Gig = {
   category: string;
   seller_id: string;
   seller_name: string;
+  seller_avatar_url?: string;
+  seller_is_verified?: boolean;
   rating: number;
   review_count: number;
   image_url?: string;
@@ -51,6 +53,8 @@ const fetchGigDetail = async (id: string) => {
       seller_id,
       profiles!seller_id (
         full_name,
+        avatar_url,
+        is_verified,
         rating,
         review_count
       )
@@ -66,6 +70,8 @@ const fetchGigDetail = async (id: string) => {
   return {
     ...data,
     seller_name: profile?.full_name || "Unknown",
+    seller_avatar_url: profile?.avatar_url,
+    seller_is_verified: profile?.is_verified || false,
     rating: profile?.rating || 0,
     review_count: profile?.review_count || 0,
   } as Gig;
@@ -117,27 +123,29 @@ export default function GigDetail() {
     },
   });
 
-  // ── Direct Message Seller ──
+  // ── Direct Message Seller (fixed - starts new chat if none exists) ──
   const messageSeller = async () => {
     if (!user) {
       toast.error("Please log in to message the seller");
       return;
     }
 
-    if (!gig) {
-      toast.error("Gig information not loaded");
+    if (!gig?.seller_id) {
+      toast.error("Seller information not loaded");
       return;
     }
+
+    const sellerId = gig.seller_id;
 
     try {
       toast.info("Checking for existing conversation...");
 
-      // Check for existing direct message thread (no booking required)
+      // Check for ANY direct message between buyer and seller
       const { data: existingThread, error: threadError } = await supabase
         .from("messages")
         .select("id")
         .or(
-          `and(sender_id.eq.${user.id},receiver_id.eq.${gig.seller_id}),and(sender_id.eq.${gig.seller_id},receiver_id.eq.${user.id})`
+          `and(sender_id.eq.${user.id},receiver_id.eq.${sellerId}),and(sender_id.eq.${sellerId},receiver_id.eq.${user.id})`
         )
         .limit(1);
 
@@ -145,28 +153,33 @@ export default function GigDetail() {
 
       if (existingThread && existingThread.length > 0) {
         toast.success("Opening existing conversation...");
-        navigate(`/chat/${gig.seller_id}`);
+        navigate(`/chat/${sellerId}`);
         return;
       }
 
-      // No thread yet → create first message to start conversation
+      // No existing thread → start new direct conversation
       const { error: insertError } = await supabase
         .from("messages")
         .insert({
           sender_id: user.id,
-          receiver_id: gig.seller_id,
-          content: `Hello! Interested in your gig: ${gig.title}`,
-          // no booking_id needed for direct chat
+          receiver_id: sellerId,
+          content: `Hello! I'm interested in your gig: "${gig.title}". Can we chat more about it?`,
+          // No booking_id — this is a direct message
         });
 
       if (insertError) throw insertError;
 
-      toast.success("Conversation started! Opening chat...");
-      navigate(`/chat/${gig.seller_id}`);
+      toast.success("New conversation started! Opening chat...");
+      navigate(`/chat/${sellerId}`);
     } catch (err: any) {
-      console.error("Message error:", err);
+      console.error("Messaging error:", err);
       toast.error("Failed to start conversation: " + (err.message || "Unknown error"));
     }
+  };
+
+  const goToSellerProfile = () => {
+    if (!gig?.seller_id) return;
+    navigate(`/seller-profile/${gig.seller_id}`);
   };
 
   if (isLoading) return <Skeleton className="min-h-screen" />;
@@ -202,11 +215,54 @@ export default function GigDetail() {
 
         <p className="text-slate-300 mb-8 whitespace-pre-line">{gig.description}</p>
 
-        <div className="flex items-center gap-4 mb-8">
-          <Star className="h-5 w-5 text-yellow-400 fill-yellow-400" />
-          <span className="text-white font-semibold">{gig.rating.toFixed(1)}</span>
-          <span className="text-slate-400">({gig.review_count} reviews)</span>
-          <span className="text-slate-400 ml-4">• By {gig.seller_name}</span>
+        {/* Prominent Seller Block – Clickable to view profile/portfolio */}
+        <div 
+          className="mb-10 p-6 bg-slate-800/70 rounded-2xl border border-slate-700 hover:border-blue-600 transition-all cursor-pointer group shadow-lg"
+          onClick={goToSellerProfile}
+        >
+          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
+            <div className="relative shrink-0">
+              <Avatar className="h-24 w-24 md:h-28 md:w-28 ring-4 ring-blue-500/20">
+                <AvatarImage src={gig.seller_avatar_url} alt={gig.seller_name} />
+                <AvatarFallback className="text-3xl">{gig.seller_name?.[0] || "?"}</AvatarFallback>
+              </Avatar>
+              {gig.seller_is_verified && (
+                <div className="absolute -bottom-3 -right-3 bg-blue-600 p-2 rounded-full border-4 border-slate-900 shadow-md">
+                  <CheckCircle2 className="h-7 w-7 text-white" />
+                </div>
+              )}
+            </div>
+
+            <div className="flex-1 text-center sm:text-left">
+              <div className="flex items-center justify-center sm:justify-start gap-3 mb-2">
+                <h3 className="text-2xl md:text-3xl font-bold text-white group-hover:text-blue-400 transition-colors">
+                  {gig.seller_name}
+                </h3>
+                {gig.seller_is_verified && (
+                  <Badge className="bg-blue-600 hover:bg-blue-700 text-white text-sm flex items-center gap-1 px-3 py-1">
+                    <CheckCircle2 className="h-4 w-4" /> Verified Seller
+                  </Badge>
+                )}
+              </div>
+
+              <div className="flex items-center justify-center sm:justify-start gap-2 mb-4">
+                <Star className="h-5 w-5 text-yellow-400 fill-yellow-400" />
+                <span className="text-xl font-semibold text-white">
+                  {gig.rating.toFixed(1)}
+                </span>
+                <span className="text-slate-400">
+                  ({gig.review_count} {gig.review_count === 1 ? "review" : "reviews"})
+                </span>
+              </div>
+
+              <Button 
+                variant="outline" 
+                className="border-blue-600 text-blue-400 hover:bg-blue-950 hover:text-blue-300 px-6 py-5 text-base font-medium"
+              >
+                View Profile & Portfolio <User className="ml-2 h-5 w-5" />
+              </Button>
+            </div>
+          </div>
         </div>
 
         <div className="flex flex-col sm:flex-row gap-4">

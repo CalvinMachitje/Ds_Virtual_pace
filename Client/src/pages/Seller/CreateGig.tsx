@@ -36,6 +36,14 @@ const gigSchema = z.object({
     "social_media",
     "web_research",
     "other",
+    "Graphics & Design",
+    "Programming & Tech",
+    "Video & Animation",
+    "Writing & Translation",
+    "Digital Marketing",
+    "Music & Audio",
+    "Photography",
+    "Business"
   ]),
   description: z.string().min(120, "Description must be at least 120 characters").max(5000),
   price: z.number().min(50, "Price must be at least R50").max(2000),
@@ -380,7 +388,7 @@ export default function CreateGig() {
                   Cancel
                 </Button>
                 <Button
-                  type="submit"
+                  type="submit" onClick={() => navigate("/my-gigs")}
                   disabled={createGig.isPending || uploadingFiles.length > 0}
                   className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 py-6 text-lg font-medium"
                 >

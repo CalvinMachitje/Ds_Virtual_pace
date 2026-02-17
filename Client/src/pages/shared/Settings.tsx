@@ -119,16 +119,6 @@ export default function Settings() {
                   {authMethod}
                 </Badge>
               </div>
-
-              <div>
-                <div className="flex items-center gap-2 text-slate-300 mb-1">
-                  <Key className="h-4 w-4" />
-                  <span className="text-sm">User ID</span>
-                </div>
-                <p className="text-slate-300 text-sm font-mono break-all">
-                  {user.id}
-                </p>
-              </div>
             </div>
           </CardContent>
         </Card>
