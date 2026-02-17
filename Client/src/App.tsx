@@ -39,6 +39,7 @@ import MyGigs from "./pages/Seller/MyGigs";
 import EditGig from "./pages/Seller/EditGig";
 import MyBookings from "./pages/Buyer/MyBookings";
 import SellerBookings from "./pages/Seller/SellerBookings";
+import ChatPage from "./pages/shared/Chat";
 
 // Supabase Auth & Layout
 import { useAuth } from "@/context/AuthContext";
@@ -156,9 +157,10 @@ const App = () => {
               <Route path="/booking/:id" element={<BookingPage />} />
               <Route path="/settings" element={<Settings />} />
 
-              {/* Messages */}
+              {/* Messages & Chat */}
               <Route path="/messages/buyer" element={<BuyerMessagePage />} />
               <Route path="/messages/seller" element={<SellerMessagesPage />} />
+              <Route path="/chat/:sellerId" element={<ChatPage />} /> {/* Direct seller chat */}
 
               {/* Bookings */}
               <Route path="/my-bookings" element={<MyBookings />} />
@@ -166,7 +168,7 @@ const App = () => {
 
             {/* Buyer-only protected routes */}
             <Route element={<BuyerProtectedRoute><ProtectedLayout /></BuyerProtectedRoute>}>
-              {/* Buyer-specific pages can go here if needed */}
+              {/* Add buyer-specific pages here if needed in future */}
             </Route>
 
             {/* Seller-only protected routes */}
@@ -175,6 +177,7 @@ const App = () => {
               <Route path="/my-gigs" element={<MyGigs />} />
               <Route path="/edit-gig/:id" element={<EditGig />} />
               <Route path="/seller-bookings" element={<SellerBookings />} />
+              <Route path="/chat/:bookingId" element={<ChatPage />} />
             </Route>
 
             {/* 404 */}

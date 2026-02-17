@@ -7,25 +7,27 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Tabs, TabsList, TabsTrigger, TabsContent } from "@/components/ui/tabs";
-import { Search, MessageSquare, Clock, CheckCircle } from "lucide-react";
+import { Search, MessageSquare, Clock, CheckCircle, Loader2 } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { Link } from "react-router-dom";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
+import { toast } from "sonner";
 
 type Conversation = {
-  id: string;
+  id: string; // booking id
   client_name: string;
   client_avatar?: string;
   last_message: string;
   last_message_time: string;
   unread_count: number;
-  status: "pending" | "active" | "completed";
+  status: "pending" | "accepted" | "rejected" | "completed" | "cancelled";
 };
 
 const fetchSellerConversations = async (sellerId: string): Promise<Conversation[]> => {
-  const { data, error } = await supabase
+  // Fetch bookings + last message + unread count per booking
+  const { data: bookings, error: bookingsError } = await supabase
     .from("bookings")
     .select(`
       id,
@@ -38,30 +40,55 @@ const fetchSellerConversations = async (sellerId: string): Promise<Conversation[
     .eq("seller_id", sellerId)
     .order("start_time", { ascending: false });
 
-  if (error) throw error;
+  if (bookingsError) throw bookingsError;
 
-  return (data || []).map((booking: any) => ({
-    id: booking.id,
-    client_name: booking.profiles?.full_name || "Client",
-    client_avatar: booking.profiles?.avatar_url,
-    last_message: "New booking request", // Replace with real last message query later
-    last_message_time: new Date(booking.start_time).toLocaleDateString(),
-    unread_count: Math.floor(Math.random() * 5), // Replace with real count
-    status: booking.status,
-  }));
+  // For each booking, fetch last message and unread count
+  const conversations = await Promise.all(
+    (bookings || []).map(async (booking: any) => {
+      const { data: lastMsg } = await supabase
+        .from("messages")
+        .select("content, created_at")
+        .eq("booking_id", booking.id)
+        .order("created_at", { ascending: false })
+        .limit(1);
+
+      const { count: unread } = await supabase
+        .from("messages")
+        .select("id", { count: "exact", head: true })
+        .eq("booking_id", booking.id)
+        .eq("receiver_id", sellerId)
+        .is("read_at", null);
+
+      return {
+        id: booking.id,
+        client_name: booking.profiles?.full_name || "Client",
+        client_avatar: booking.profiles?.avatar_url,
+        last_message: lastMsg?.[0]?.content || "New booking request",
+        last_message_time: lastMsg?.[0]?.created_at
+          ? new Date(lastMsg[0].created_at).toLocaleString()
+          : new Date(booking.start_time).toLocaleDateString(),
+        unread_count: unread || 0,
+        status: booking.status,
+      };
+    })
+  );
+
+  return conversations;
 };
 
 export default function SellerMessagesPage() {
   const { user } = useAuth();
   const sellerId = user?.id;
   const queryClient = useQueryClient();
+  const [searchTerm, setSearchTerm] = useState("");
 
-  const { data: conversations = [], isLoading, error } = useQuery<Conversation[]>({
+  const { data: conversations = [], isLoading, error, refetch } = useQuery<Conversation[]>({
     queryKey: ["seller-conversations", sellerId],
     queryFn: () => fetchSellerConversations(sellerId || ""),
     enabled: !!sellerId,
   });
 
+  // Realtime: new message → refresh conversations
   useEffect(() => {
     if (!sellerId) return;
 
@@ -86,6 +113,8 @@ export default function SellerMessagesPage() {
               );
             }
           );
+          // Optional: toast for new message
+          toast.info("New message received from a client");
         }
       )
       .subscribe();
@@ -95,13 +124,18 @@ export default function SellerMessagesPage() {
     };
   }, [sellerId, queryClient]);
 
+  const filteredConversations = conversations.filter((conv) =>
+    conv.client_name.toLowerCase().includes(searchTerm.toLowerCase()) ||
+    conv.last_message.toLowerCase().includes(searchTerm.toLowerCase())
+  );
+
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center text-red-400">
         <div className="text-center">
           <p className="text-xl mb-4">Failed to load messages</p>
           <p className="text-slate-400 mb-6">{(error as Error).message}</p>
-          <Button onClick={() => queryClient.refetchQueries({ queryKey: ["seller-conversations"] })}>
+          <Button onClick={() => refetch()}>
             Retry
           </Button>
         </div>
@@ -120,6 +154,8 @@ export default function SellerMessagesPage() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
             <Input
               placeholder="Search clients or messages..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
               className="pl-10 bg-slate-900/60 border-slate-700 text-white placeholder:text-slate-500"
             />
           </div>
@@ -145,18 +181,18 @@ export default function SellerMessagesPage() {
               </div>
             ))}
           </div>
-        ) : conversations.length === 0 ? (
+        ) : filteredConversations.length === 0 ? (
           <div className="text-center py-16 text-slate-400 bg-slate-900/40 rounded-xl border border-slate-800">
             <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p className="text-xl font-medium">No messages yet</p>
-            <p className="mt-2">When clients message you, conversations will appear here.</p>
+            <p className="mt-2">When clients message you or book your gigs, conversations will appear here.</p>
           </div>
         ) : (
           <div className="space-y-3">
-            {conversations.map((conv) => (
+            {filteredConversations.map((conv) => (
               <Link
                 key={conv.id}
-                to={`/chat/${conv.id}`}
+                to={`/chat/${conv.id}`} // booking ID as chat key
                 className="block bg-slate-900/70 border border-slate-700 rounded-xl p-4 hover:border-blue-600 transition-colors group"
               >
                 <div className="flex items-start gap-4">

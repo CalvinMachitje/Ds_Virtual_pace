@@ -8,7 +8,7 @@ type AuthContextType = {
   session: Session | null;
   user: User | null;
   loading: boolean;
-  signUp: (params: { email: string; password: string; options?: any }) => Promise<{ data: any; error: any }>;
+  signUp: (params: { email: string; password: string; options?: { data?: { role?: 'buyer' | 'seller' } } }) => Promise<{ data: any; error: any }>;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
   userRole: 'buyer' | 'seller' | null;
@@ -45,6 +45,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => subscription.unsubscribe();
   }, []);
 
+  // Real-time profile role sync (if role changes in DB)
+  useEffect(() => {
+    if (!session?.user?.id) return;
+
+    const channel = supabase
+      .channel(`profile-role:${session.user.id}`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'profiles',
+          filter: `id=eq.${session.user.id}`,
+        },
+        (payload) => {
+          const newRole = payload.new.role as 'buyer' | 'seller' | null;
+          setUserRole(newRole);
+          toast.info(`Your role updated to ${newRole}`);
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [session?.user?.id]);
+
   async function fetchUserRole(userId: string) {
     try {
       const { data, error } = await supabase
@@ -61,16 +88,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }
 
-  const signUp = async ({ email, password, options }: { email: string; password: string; options?: any }) => {
+  const signUp = async ({ email, password, options }: { email: string; password: string; options?: { data?: { role?: 'buyer' | 'seller' } } }) => {
     try {
       const result = await supabase.auth.signUp({
         email,
         password,
-        options,
+        options: {
+          ...options,
+          data: {
+            role: options?.data?.role ?? 'buyer', // default to buyer if not specified
+          },
+        },
       });
+
+      if (result.error) throw result.error;
+
+      toast.success("Sign up successful! Check your email to confirm.");
       return result;
     } catch (err: any) {
-      console.error("SignUp error:", err);
+      toast.error("Sign up failed: " + (err.message || "Unknown error"));
       return { data: null, error: err };
     }
   };
@@ -78,9 +114,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const signIn = async (email: string, password: string) => {
     try {
       const { error } = await supabase.auth.signInWithPassword({ email, password });
-      return { error };
+      if (error) throw error;
+
+      toast.success("Logged in successfully");
+      return { error: null };
     } catch (err: any) {
-      console.error("SignIn error:", err);
+      toast.error("Login failed: " + (err.message || "Invalid credentials"));
       return { error: err };
     }
   };

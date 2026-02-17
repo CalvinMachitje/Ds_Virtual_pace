@@ -1,4 +1,4 @@
-// src/pages/Seller/SellerBookings.tsx
+// src/pages/seller/SellerBookings.tsx
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useEffect } from "react";
 import { supabase } from "@/lib/supabase";
@@ -10,6 +10,7 @@ import { Calendar, Clock, MessageSquare, Loader2, CheckCircle2, XCircle } from "
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 
 type Booking = {
   id: string;
@@ -32,6 +33,7 @@ type Booking = {
 export default function SellerBookings() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const navigate = useNavigate();
 
   const { data: bookings = [], isLoading, error } = useQuery<Booking[]>({
     queryKey: ["seller-bookings", user?.id],
@@ -144,6 +146,12 @@ export default function SellerBookings() {
       toast.error("Failed to update booking: " + err.message);
     },
   });
+
+  // Message Buyer handler
+  const handleMessageBuyer = (bookingId: string, buyerName: string) => {
+    toast.info(`Opening chat with ${buyerName}...`);
+    navigate(`/chat/${bookingId}`);
+  };
 
   if (isLoading) {
     return (
@@ -260,7 +268,12 @@ export default function SellerBookings() {
                   )}
 
                   <div className="flex gap-3 pt-2">
-                    <Button variant="outline" size="sm" className="flex-1">
+                    <Button 
+                      variant="outline" 
+                      size="sm" 
+                      className="flex-1"
+                      onClick={() => handleMessageBuyer(booking.id, booking.buyer.full_name)}
+                    >
                       <MessageSquare className="h-4 w-4 mr-2" />
                       Message Buyer
                     </Button>

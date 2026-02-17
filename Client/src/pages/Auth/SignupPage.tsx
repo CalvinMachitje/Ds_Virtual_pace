@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
-import { User, Mail, Lock, Eye, EyeOff, ArrowLeft, Phone, Facebook, Chrome } from "lucide-react";
+import { User, Mail, Lock, Eye, EyeOff, ArrowLeft, Phone, Facebook, Chrome, Loader2 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
 import { supabase } from "@/lib/supabase";
 import { Link } from "react-router-dom";
@@ -79,7 +79,7 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      // Sign up with metadata
+      // Sign up with metadata (type assertion to match extended AuthContext type)
       const { data: signUpData, error: signUpError } = await signUp({
         email: email.trim(),
         password: password.trim(),
@@ -87,8 +87,8 @@ export default function SignupPage() {
           data: {
             full_name: fullName.trim(),
             phone: phone.trim() || null,
-            role, // This is now correctly passed and respected by trigger
-          },
+            role,
+          } as { full_name: string; phone: string | null; role: "buyer" | "seller" },
         },
       });
 
@@ -127,7 +127,7 @@ export default function SignupPage() {
       if (error) throw error;
     } catch (err: any) {
       setError(err.message);
-      toast.error(err.message);
+      toast.error(err.message || "OAuth login failed");
     } finally {
       setLoading(false);
     }
@@ -160,6 +160,7 @@ export default function SignupPage() {
               className="bg-blue-600 hover:bg-blue-700 w-full"
               disabled={loading}
             >
+              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
               Resend Confirmation Email
             </Button>
             <Button variant="outline" onClick={() => navigate("/login")} className="w-full">
@@ -314,7 +315,7 @@ export default function SignupPage() {
                 {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
             </div>
-            {fieldErrors.password && <p className="text-red-400 text-xs">{fieldErrors.password}</p>}
+            {fieldErrors.password && <p className="text-red-400 text-xs mt-1">{fieldErrors.password}</p>}
 
             {/* Password Strength Meter */}
             {password && (

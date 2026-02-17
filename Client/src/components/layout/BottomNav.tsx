@@ -134,7 +134,7 @@ export default function BottomNav() {
             icon: MessageSquare,
             label: "Messages",
             path: "/messages/buyer",
-            exact: true,
+            exact: false, // allow nested /chat/* to stay active
             badge: unreadCount > 0 ? unreadCount : undefined,
           },
           {
@@ -149,7 +149,7 @@ export default function BottomNav() {
             icon: MessageSquare,
             label: "Messages",
             path: "/messages/seller",
-            exact: true,
+            exact: false, // allow nested /chat/* to stay active
             badge: unreadCount > 0 ? unreadCount : undefined,
           },
           {
@@ -224,9 +224,10 @@ export default function BottomNav() {
             );
           }
 
+          // Improved active detection: exact for top-level, startsWith for nested (chat, etc.)
           const isActive = item.exact
             ? currentPath === item.path
-            : currentPath === item.path || currentPath.startsWith(item.path);
+            : currentPath === item.path || currentPath.startsWith(item.path + "/");
 
           return (
             <Link
@@ -234,7 +235,9 @@ export default function BottomNav() {
               to={item.path}
               className={cn(
                 "relative flex flex-col items-center justify-center flex-1 py-1 transition-all duration-200",
-                isActive ? "text-blue-400 scale-110" : "text-slate-400 hover:text-slate-200 hover:scale-105"
+                isActive
+                  ? "text-blue-400 scale-110"
+                  : "text-slate-400 hover:text-slate-200 hover:scale-105"
               )}
             >
               <div

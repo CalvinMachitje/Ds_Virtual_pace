@@ -168,16 +168,6 @@ export default function BuyerDashboard() {
                   </Button>
                 </CardContent>
               </Card>
-
-              <Card className="bg-slate-900/70 border-slate-700">
-                <CardContent className="p-8">
-                  <h3 className="text-2xl font-bold text-white mb-4">My Bookings</h3>
-                  <p className="text-slate-300 mb-6">View and manage your active & completed bookings</p>
-                  <Button variant="outline" size="lg" className="border-slate-600 hover:bg-slate-800 w-full">
-                    Go to Bookings
-                  </Button>
-                </CardContent>
-              </Card>
             </div>
           </>
         )}

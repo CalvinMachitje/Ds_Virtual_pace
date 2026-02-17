@@ -61,7 +61,6 @@ const fetchGigDetail = async (id: string) => {
   if (error) throw error;
   if (!data) throw new Error("Gig not found");
 
-  // profiles can be returned as an array when using a foreign table select; pick the first profile if present
   const profile = Array.isArray(data.profiles) ? data.profiles[0] : data.profiles;
 
   return {
@@ -87,10 +86,10 @@ export default function GigDetail() {
     enabled: !!id,
   });
 
+  // ── Booking Mutation ──
   const createBooking = useMutation({
     mutationFn: async () => {
-      if (!user) throw new Error("You must be logged in to book");
-      if (!gig) throw new Error("Gig not loaded");
+      if (!user || !gig) throw new Error("User or gig not loaded");
 
       const { error } = await supabase
         .from("bookings")
@@ -99,16 +98,17 @@ export default function GigDetail() {
           buyer_id: user.id,
           seller_id: gig.seller_id,
           price: gig.price,
-          requirements: bookingNote.trim() || null,
+          service: gig.title,
+          start_time: new Date().toISOString(),
+          end_time: new Date(new Date().getTime() + 60 * 60 * 1000).toISOString(),
           status: "pending",
         });
 
       if (error) throw error;
     },
     onSuccess: () => {
-      toast.success("Booking request sent! The seller will review it soon.");
+      toast.success("Booking request sent! Seller will review it soon.");
       setShowBookingModal(false);
-      setBookingNote("");
       queryClient.invalidateQueries({ queryKey: ["my-bookings", user?.id] });
       navigate("/my-bookings");
     },
@@ -117,54 +117,79 @@ export default function GigDetail() {
     },
   });
 
-  const handleBookNow = () => {
+  // ── Direct Message Seller ──
+  const messageSeller = async () => {
     if (!user) {
-      toast.error("Please log in to book this gig");
+      toast.error("Please log in to message the seller");
       return;
     }
-    setShowBookingModal(true);
+
+    if (!gig) {
+      toast.error("Gig information not loaded");
+      return;
+    }
+
+    try {
+      toast.info("Checking for existing conversation...");
+
+      // Check for existing direct message thread (no booking required)
+      const { data: existingThread, error: threadError } = await supabase
+        .from("messages")
+        .select("id")
+        .or(
+          `and(sender_id.eq.${user.id},receiver_id.eq.${gig.seller_id}),and(sender_id.eq.${gig.seller_id},receiver_id.eq.${user.id})`
+        )
+        .limit(1);
+
+      if (threadError) throw threadError;
+
+      if (existingThread && existingThread.length > 0) {
+        toast.success("Opening existing conversation...");
+        navigate(`/chat/${gig.seller_id}`);
+        return;
+      }
+
+      // No thread yet → create first message to start conversation
+      const { error: insertError } = await supabase
+        .from("messages")
+        .insert({
+          sender_id: user.id,
+          receiver_id: gig.seller_id,
+          content: `Hello! Interested in your gig: ${gig.title}`,
+          // no booking_id needed for direct chat
+        });
+
+      if (insertError) throw insertError;
+
+      toast.success("Conversation started! Opening chat...");
+      navigate(`/chat/${gig.seller_id}`);
+    } catch (err: any) {
+      console.error("Message error:", err);
+      toast.error("Failed to start conversation: " + (err.message || "Unknown error"));
+    }
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
-        <div className="max-w-4xl mx-auto space-y-8">
-          <Skeleton height={400} className="rounded-xl" />
-          <Skeleton height={80} />
-          <Skeleton height={200} />
-          <Skeleton height={120} />
-        </div>
-      </div>
-    );
-  }
+  if (isLoading) return <Skeleton className="min-h-screen" />;
 
-  if (error) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
-        <p className="text-xl mb-4">Failed to load gig</p>
-        <p className="text-slate-400 mb-6">{error.message}</p>
-        <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
-          Retry
-        </Button>
-      </div>
-    );
-  }
+  if (error) return (
+    <div className="min-h-screen flex flex-col items-center justify-center text-red-400">
+      <p>Failed to load gig</p>
+      <Button onClick={() => refetch()}>Retry</Button>
+    </div>
+  );
 
-  if (!gig) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-slate-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
-        <Briefcase className="h-16 w-16 mb-6 opacity-50" />
-        <h2 className="text-2xl font-bold mb-2">Gig Not Found</h2>
-        <p className="mb-8">This gig doesn't exist or has been removed.</p>
-        <Button asChild className="bg-blue-600 hover:bg-blue-700">
-          <Link to="/gigs">Browse All Gigs</Link>
-        </Button>
-      </div>
-    );
-  }
+  if (!gig) return (
+    <div className="min-h-screen flex flex-col items-center justify-center text-slate-400">
+      <Briefcase className="h-16 w-16 mb-6 opacity-50" />
+      <h2 className="text-2xl font-bold mb-2">Gig Not Found</h2>
+      <Link to="/gigs">
+        <Button>Browse All Gigs</Button>
+      </Link>
+    </div>
+  );
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-slate-900 p-6">
       <div className="max-w-4xl mx-auto">
         <img
           src={gig.image_url || "/placeholder-gig-large.jpg"}
@@ -173,92 +198,29 @@ export default function GigDetail() {
         />
 
         <h1 className="text-4xl font-bold text-white mb-4">{gig.title}</h1>
-        <Badge variant="secondary" className="mb-6 capitalize">
-          {gig.category.replace(/_/g, " ")}
-        </Badge>
+        <Badge variant="secondary" className="mb-6 capitalize">{gig.category.replace(/_/g, " ")}</Badge>
 
-        <p className="text-slate-300 leading-relaxed mb-8 whitespace-pre-line">
-          {gig.description}
-        </p>
+        <p className="text-slate-300 mb-8 whitespace-pre-line">{gig.description}</p>
 
         <div className="flex items-center gap-4 mb-8">
           <Star className="h-5 w-5 text-yellow-400 fill-yellow-400" />
-          <span className="text-white font-semibold">
-            {gig.rating.toFixed(1)}
-          </span>
-          <span className="text-slate-400">
-            ({gig.review_count} reviews)
-          </span>
+          <span className="text-white font-semibold">{gig.rating.toFixed(1)}</span>
+          <span className="text-slate-400">({gig.review_count} reviews)</span>
           <span className="text-slate-400 ml-4">• By {gig.seller_name}</span>
         </div>
 
-        <div className="grid md:grid-cols-2 gap-8 mb-10">
-          <Card className="bg-slate-900/70 border-slate-700">
-            <CardHeader>
-              <CardTitle className="text-white">Pricing</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p className="text-3xl font-bold text-green-400 mb-4">
-                R{gig.price.toFixed(2)} / hour
-              </p>
-              <p className="text-slate-400">
-                Includes all basic features. Custom packages available upon request.
-              </p>
-            </CardContent>
-          </Card>
-
-          <Card className="bg-slate-900/70 border-slate-700">
-            <CardHeader>
-              <CardTitle className="text-white">Seller Info</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="flex items-center gap-3 mb-4">
-                <Avatar className="h-12 w-12">
-                  <AvatarFallback>{gig.seller_name?.[0] || "?"}</AvatarFallback>
-                </Avatar>
-                <div>
-                  <p className="font-medium text-white">{gig.seller_name}</p>
-                  <p className="text-sm text-slate-400">
-                    Rating: {gig.rating.toFixed(1)} ({gig.review_count} reviews)
-                  </p>
-                </div>
-              </div>
-              <Link
-                to={`/profile/${gig.seller_id}`}
-                className="text-blue-400 hover:text-blue-300 hover:underline text-sm"
-              >
-                View Full Seller Profile →
-              </Link>
-            </CardContent>
-          </Card>
-        </div>
-
-        {/* Action Buttons */}
         <div className="flex flex-col sm:flex-row gap-4">
           <Button
             variant="outline"
             className="flex-1 border-blue-600 text-blue-400 hover:bg-blue-950"
-            onClick={() => {
-              if (!user) {
-                toast.error("Please log in to message the seller");
-                return;
-              }
-              // TODO: navigate to chat creation
-              toast.info("Opening chat with seller...");
-            }}
+            onClick={messageSeller}
           >
             <MessageSquare className="mr-2 h-5 w-5" />
             Message Seller
           </Button>
 
           <Button
-            onClick={() => {
-              if (!user) {
-                toast.error("Please log in to book this gig");
-                return;
-              }
-              setShowBookingModal(true);
-            }}
+            onClick={() => setShowBookingModal(true)}
             className="flex-1 bg-emerald-600 hover:bg-emerald-700"
           >
             <Calendar className="mr-2 h-5 w-5" />
@@ -266,38 +228,31 @@ export default function GigDetail() {
           </Button>
         </div>
 
-        {/* Booking Confirmation Modal */}
+        {/* Booking Modal */}
         <Dialog open={showBookingModal} onOpenChange={setShowBookingModal}>
           <DialogContent className="sm:max-w-md">
             <DialogHeader>
               <DialogTitle>Confirm Booking</DialogTitle>
               <DialogDescription>
-                You're about to book <strong>{gig.title}</strong> with{" "}
-                <strong>{gig.seller_name}</strong> at R{gig.price.toFixed(2)} per hour.
+                You're booking <strong>{gig.title}</strong> with <strong>{gig.seller_name}</strong>
               </DialogDescription>
             </DialogHeader>
-
-            <div className="space-y-6 py-4">
-              <div>
-                <Label htmlFor="requirements">Additional requirements or message</Label>
-                <Textarea
-                  id="requirements"
-                  placeholder="e.g., project deadline, specific tools needed, hours per week, etc..."
-                  value={bookingNote}
-                  onChange={(e) => setBookingNote(e.target.value)}
-                  className="min-h-32 resize-none"
-                />
+            <CardContent>
+              <div className="space-y-4 mt-4">
+                <div>
+                  <Label htmlFor="note">Note to seller (optional)</Label>
+                  <Textarea
+                    id="note"
+                    placeholder="Any special requirements or questions?"
+                    value={bookingNote}
+                    onChange={(e) => setBookingNote(e.target.value)}
+                    className="min-h-[100px]"
+                  />
+                </div>
               </div>
-
-              <div className="text-sm text-slate-400">
-                This is a booking request. The seller will review and accept or decline.
-              </div>
-            </div>
-
+            </CardContent>
             <DialogFooter className="sm:justify-between">
-              <Button variant="outline" onClick={() => setShowBookingModal(false)}>
-                Cancel
-              </Button>
+              <Button variant="outline" onClick={() => setShowBookingModal(false)}>Cancel</Button>
               <Button
                 onClick={() => createBooking.mutate()}
                 disabled={createBooking.isPending}
