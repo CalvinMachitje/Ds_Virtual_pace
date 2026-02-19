@@ -2,7 +2,7 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { DollarSign, Star, Briefcase, Calendar, Users, Currency, CreditCard } from "lucide-react";
+import { DollarSign, Star, Briefcase, Calendar, Users, CreditCard, AlertCircle } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { supabase } from "@/lib/supabase";
@@ -81,8 +81,9 @@ export default function SellerDashboard() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
-        <p className="text-xl mb-4">Failed to load dashboard</p>
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
+        <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-500" />
+        <h2 className="text-2xl font-bold mb-2">Failed to load dashboard</h2>
         <p className="text-slate-400 mb-6">{(error as Error).message}</p>
         <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
           Retry
@@ -92,7 +93,7 @@ export default function SellerDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-4xl font-bold text-white mb-2">Seller Dashboard</h1>
         <p className="text-slate-400 mb-8">Manage your gigs, bookings & earnings</p>

@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/shared/GigDetail.tsx
 import { useParams, Link, useNavigate } from "react-router-dom";
 import { useState } from "react";

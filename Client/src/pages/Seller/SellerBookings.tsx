@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/seller/SellerBookings.tsx
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useEffect } from "react";
@@ -6,7 +7,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Calendar, Clock, MessageSquare, Loader2, CheckCircle2, XCircle } from "lucide-react";
+import { Calendar, Clock, MessageSquare, Loader2, CheckCircle2, XCircle, AlertCircle } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { toast } from "sonner";
@@ -52,8 +53,7 @@ export default function SellerBookings() {
 
       if (error) throw error;
 
-      // Supabase returns related records as arrays even for single fk relations;
-      // normalize gig and buyer to single objects to match the Booking type.
+      // Normalize gig and buyer
       const normalized = (data || []).map((row: any) => {
         const gig = Array.isArray(row.gig) ? row.gig[0] ?? null : row.gig;
         const buyer = Array.isArray(row.buyer) ? row.buyer[0] ?? null : row.buyer;
@@ -75,9 +75,6 @@ export default function SellerBookings() {
     enabled: !!user?.id,
   });
 
-  // ────────────────────────────────────────────────
-  // Real-time updates for incoming bookings & status changes
-  // ────────────────────────────────────────────────
   useEffect(() => {
     if (!user?.id) return;
 
@@ -114,7 +111,6 @@ export default function SellerBookings() {
             toast.warning(`A booking for "${gigTitle}" was deleted`);
           }
 
-          // Refresh list
           queryClient.invalidateQueries({ queryKey: ["seller-bookings", user.id] });
         }
       )
@@ -125,7 +121,6 @@ export default function SellerBookings() {
     };
   }, [user?.id, queryClient]);
 
-  // Accept / Reject booking
   const updateBookingStatus = useMutation({
     mutationFn: async ({ bookingId, newStatus }: { bookingId: string; newStatus: string }) => {
       if (!user?.id) throw new Error("Not authenticated");
@@ -147,7 +142,6 @@ export default function SellerBookings() {
     },
   });
 
-  // Message Buyer handler
   const handleMessageBuyer = (bookingId: string, buyerName: string) => {
     toast.info(`Opening chat with ${buyerName}...`);
     navigate(`/chat/${bookingId}`);
@@ -155,7 +149,7 @@ export default function SellerBookings() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
         <div className="max-w-5xl mx-auto">
           <h1 className="text-3xl font-bold text-white mb-8">Incoming Bookings</h1>
           <div className="space-y-6">
@@ -170,7 +164,7 @@ export default function SellerBookings() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
         <p className="text-xl mb-4">Failed to load bookings</p>
         <p className="text-slate-400 mb-6">{error.message}</p>
         <Button onClick={() => queryClient.refetchQueries({ queryKey: ["seller-bookings", user?.id] })}>
@@ -181,7 +175,7 @@ export default function SellerBookings() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-5xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Incoming Bookings</h1>
 

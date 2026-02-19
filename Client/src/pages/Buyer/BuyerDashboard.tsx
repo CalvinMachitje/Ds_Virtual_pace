@@ -71,7 +71,7 @@ export default function BuyerDashboard() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
         <p className="text-xl mb-4">Failed to load dashboard</p>
         <p className="text-slate-400 mb-6">{(error as Error).message}</p>
         <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
@@ -82,7 +82,7 @@ export default function BuyerDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24 md:ml-64">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-4xl font-bold text-white mb-2">Welcome back</h1>
         <p className="text-slate-400 mb-8">What do you need help with today?</p>

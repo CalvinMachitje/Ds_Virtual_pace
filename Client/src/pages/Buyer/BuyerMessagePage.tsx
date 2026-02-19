@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/buyer/BuyerMessagesPage.tsx
 import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
@@ -18,7 +19,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { MessageSquare, Plus, Bell, Loader2 } from "lucide-react";
+import { MessageSquare, Plus, Bell, Loader2, AlertCircle } from "lucide-react";
 import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
@@ -213,9 +214,10 @@ export default function BuyerMessagesPage() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center text-red-400">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6 md:ml-64">
         <div className="text-center">
-          <p className="text-xl mb-4">Failed to load messages</p>
+          <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-500" />
+          <h2 className="text-2xl font-bold mb-2">Failed to load messages</h2>
           <p className="text-slate-400 mb-6">{(error as Error).message}</p>
           <Button onClick={() => queryClient.refetchQueries({ queryKey: ["buyer-conversations"] })}>
             Retry
@@ -226,7 +228,7 @@ export default function BuyerMessagesPage() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6 md:ml-64">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center justify-between mb-2">
           <h1 className="text-3xl font-bold text-white">Your Messages</h1>

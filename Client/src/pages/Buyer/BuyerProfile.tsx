@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/Buyer/BuyerProfile.tsx
 import { useState, useEffect, useRef } from "react";
 import { ArrowLeft, MoreVertical, MessageSquare, Bookmark, Star, CheckCircle, Edit, Upload, X, Plus, Save, Clock, DollarSign, List, CreditCard } from "lucide-react";
@@ -286,7 +287,7 @@ export default function BuyerProfile() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
         <div className="max-w-4xl mx-auto space-y-8">
           <div className="flex items-center justify-between">
             <Skeleton className="h-8 w-8 rounded-full" />
@@ -310,7 +311,7 @@ export default function BuyerProfile() {
 
   if (error || !profile) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 text-center">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 text-center md:ml-64">
         <h2 className="text-3xl font-bold text-red-400 mb-4">Profile Not Found</h2>
         <p className="text-slate-300 mb-8 max-w-md">{error || "This profile doesn't exist or is not public."}</p>
         <Button onClick={() => navigate(-1)} className="bg-blue-600 hover:bg-blue-700">
@@ -321,7 +322,7 @@ export default function BuyerProfile() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6 pb-24">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6 pb-24 md:ml-64">
       <div className="max-w-4xl mx-auto">
         {/* Header */}
         <header className="flex items-center justify-between mb-8">
