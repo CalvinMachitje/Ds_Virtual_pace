@@ -3,14 +3,26 @@ from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 from app.services.supabase_service import supabase
 from datetime import datetime, timedelta
-from werkzeug.security import generate_password_hash, check_password_hash
 import uuid
+import re
 
 bp = Blueprint("shared", __name__, url_prefix="/api")
 
+# Allowed redirect domains for password reset (add your production domain!)
+ALLOWED_REDIRECT_DOMAINS = [
+    "localhost:5173",
+    "127.0.0.1:5173",
+    "yourapp.com",           # ← change to your real production domain
+    "www.yourapp.com",
+]
+
+# Simple in-memory rate limit for forgot-password (demo) — use Flask-Limiter + Redis in prod
+reset_attempts = {}  # {email: {"count": int, "last_attempt": datetime}}
+
+
 # ────────────────────────────────────────────────
 # GET /api/gigs
-# List published gigs (with pagination, filters)
+# List published gigs (paginated + filters, public)
 # ────────────────────────────────────────────────
 @bp.route("/gigs", methods=["GET"])
 def list_gigs():
@@ -34,6 +46,9 @@ def list_gigs():
             .eq("status", "published")
 
         if search:
+            # Prevent overly broad searches
+            if len(search) < 2:
+                return jsonify({"gigs": [], "nextPage": None, "totalCount": 0}), 200
             query = query.or_(
                 f"title.ilike.%{search}%,description.ilike.%{search}%"
             )
@@ -87,6 +102,12 @@ def list_gigs():
 @bp.route("/gigs/<string:id>", methods=["GET"])
 def get_gig(id):
     try:
+        # Validate UUID format
+        try:
+            uuid.UUID(id)
+        except ValueError:
+            return jsonify({"error": "Invalid gig ID"}), 400
+
         res = supabase.table("gigs")\
             .select("""
                 id, title, description, price, category, created_at, image_url,
@@ -119,7 +140,7 @@ def get_gig(id):
 
 # ────────────────────────────────────────────────
 # GET /api/categories/:category
-# Sellers + gigs in a specific category (used in CategoryPage)
+# Sellers + gigs in a specific category
 # ────────────────────────────────────────────────
 @bp.route("/categories/<string:category>", methods=["GET"])
 def category_sellers(category):
@@ -130,7 +151,6 @@ def category_sellers(category):
     search = request.args.get("search", "").strip()
 
     try:
-        # Fetch gigs in category → group by seller
         query = supabase.table("gigs")\
             .select("""
                 id, title, description, price, seller_id,
@@ -140,6 +160,8 @@ def category_sellers(category):
             .ilike("category", f"%{category}%")
 
         if search:
+            if len(search) < 2:
+                return jsonify({"sellers": [], "total": 0, "page": page, "has_more": False}), 200
             query = query.or_(
                 f"title.ilike.%{search}%,profiles.full_name.ilike.%{search}%"
             )
@@ -147,7 +169,7 @@ def category_sellers(category):
         if min_rating > 0:
             query = query.gte("profiles.rating", min_rating)
 
-        if max_price:
+        if max_price is not None:
             query = query.lte("price", max_price)
 
         res = query.execute()
@@ -167,7 +189,7 @@ def category_sellers(category):
                         "is_online": seller.get("is_online", False),
                     },
                     "gigs": [],
-                    "reviewCount": 0,  # can be fetched separately if needed
+                    "reviewCount": 0,
                 }
             grouped[seller_id]["gigs"].append({
                 "id": gig["id"],
@@ -178,7 +200,6 @@ def category_sellers(category):
 
         result = list(grouped.values())
 
-        # Pagination on grouped sellers
         start = (page - 1) * limit
         end = start + limit
         paginated = result[start:end]
@@ -191,13 +212,13 @@ def category_sellers(category):
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Category error: {str(e)}")
+        current_app.logger.error(f"Category error ({category}): {str(e)}")
         return jsonify({"error": "Failed to load category"}), 500
 
 
 # ────────────────────────────────────────────────
 # POST /api/bookings
-# Create new booking request (from GigDetail)
+# Create new booking request (buyer only)
 # ────────────────────────────────────────────────
 @bp.route("/bookings", methods=["POST"])
 @jwt_required()
@@ -206,21 +227,26 @@ def create_booking():
     data = request.get_json()
 
     gig_id = data.get("gig_id")
-    note = data.get("note")
+    note = data.get("note", "").strip()
 
     if not gig_id:
         return jsonify({"error": "gig_id required"}), 400
 
     try:
-        # Fetch gig to get seller & price
         gig = supabase.table("gigs")\
-            .select("id, seller_id, price, title")\
+            .select("id, seller_id, price, title, status")\
             .eq("id", gig_id)\
-            .eq("status", "published")\
             .maybe_single().execute().data
 
         if not gig:
-            return jsonify({"error": "Gig not found or not available"}), 404
+            return jsonify({"error": "Gig not found"}), 404
+
+        if gig["status"] != "published":
+            return jsonify({"error": "Gig is not available for booking"}), 400
+
+        # Prevent self-booking
+        if gig["seller_id"] == buyer_id:
+            return jsonify({"error": "Cannot book your own gig"}), 403
 
         booking = {
             "gig_id": gig_id,
@@ -228,7 +254,7 @@ def create_booking():
             "seller_id": gig["seller_id"],
             "price": gig["price"],
             "service": gig["title"],
-            "note": note or None,
+            "note": note if note else None,
             "start_time": datetime.utcnow().isoformat(),
             "status": "pending",
             "created_at": "now()",
@@ -246,13 +272,13 @@ def create_booking():
         }), 201
 
     except Exception as e:
-        current_app.logger.error(f"Booking creation error: {str(e)}")
+        current_app.logger.error(f"Booking creation error (buyer {buyer_id}): {str(e)}")
         return jsonify({"error": "Failed to create booking"}), 500
 
 
 # ────────────────────────────────────────────────
 # GET /api/bookings/:id/review
-# Get booking details for review/payment confirmation
+# Get booking details for review/payment (buyer only)
 # ────────────────────────────────────────────────
 @bp.route("/bookings/<string:id>/review", methods=["GET"])
 @jwt_required()
@@ -260,44 +286,53 @@ def review_booking(id):
     user_id = get_jwt_identity()
 
     try:
-        res = supabase.table("bookings")\
+        booking = supabase.table("bookings")\
             .select("""
                 id, seller_id, price, service, start_time, duration,
                 seller:profiles!seller_id (full_name, avatar_url)
             """)\
             .eq("id", id)\
             .eq("buyer_id", user_id)\
-            .maybe_single().execute()
+            .maybe_single().execute().data
 
-        if not res.data:
+        if not booking:
             return jsonify({"error": "Booking not found or not yours"}), 404
 
-        booking = res.data
         seller = booking.pop("seller", {}) or {}
+
+        # Example fee/tax calculation (customize as needed)
+        fee = booking["price"] * 0.10
+        taxes = booking["price"] * 0.15
+        total = booking["price"] + fee + taxes
 
         return jsonify({
             **booking,
             "seller_name": seller.get("full_name", "Unknown"),
             "avatar_url": seller.get("avatar_url"),
-            # Add fee/tax calculation if needed
-            "fee": booking["price"] * 0.10,  # example 10%
-            "taxes": booking["price"] * 0.15,  # example 15%
-            "total": booking["price"] * 1.25,
-            "payment_method": "Credit Card"  # mock or fetch from user
+            "fee": round(fee, 2),
+            "taxes": round(taxes, 2),
+            "total": round(total, 2),
+            "payment_method": "Credit Card"  # Replace with real user payment method fetch
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Review booking error: {str(e)}")
-        return jsonify({"error": "Failed to load booking"}), 500
+        current_app.logger.error(f"Review booking error (user {user_id}, booking {id}): {str(e)}")
+        return jsonify({"error": "Failed to load booking details"}), 500
 
 
 # ────────────────────────────────────────────────
 # GET /api/profiles/:id/verification
-# Public verification status & trust info
+# Public verification status (no auth required)
 # ────────────────────────────────────────────────
 @bp.route("/profiles/<string:id>/verification", methods=["GET"])
 def get_verification_status(id):
     try:
+        # Validate UUID format
+        try:
+            uuid.UUID(id)
+        except ValueError:
+            return jsonify({"error": "Invalid profile ID"}), 400
+
         profile = supabase.table("profiles")\
             .select("trust_score, jobs_done, rating")\
             .eq("id", id)\
@@ -306,7 +341,7 @@ def get_verification_status(id):
         if not profile:
             return jsonify({"error": "Profile not found"}), 404
 
-        # Mock credentials (can be replaced with real data from verifications/jobs table)
+        # Real credentials would come from a verifications table
         credentials = [
             {"title": "Identity Verified", "desc": "Government ID verified", "icon": "UserCheck"},
             {"title": "Background Check", "desc": "Clear criminal record", "icon": "ShieldCheck"},
@@ -322,36 +357,57 @@ def get_verification_status(id):
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Verification status error: {str(e)}")
-        return jsonify({"error": "Failed to load verification"}), 500
+        current_app.logger.error(f"Verification status error (profile {id}): {str(e)}")
+        return jsonify({"error": "Failed to load verification status"}), 500
 
 
 # ────────────────────────────────────────────────
 # POST /api/auth/forgot-password
-# Send password reset email
+# Send password reset email (rate-limited)
 # ────────────────────────────────────────────────
 @bp.route("/auth/forgot-password", methods=["POST"])
 def forgot_password():
     data = request.get_json()
-    email = data.get("email")
+    email = data.get("email", "").strip().lower()
 
-    if not email:
-        return jsonify({"error": "Email required"}), 400
+    if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
+        return jsonify({"error": "Valid email required"}), 400
+
+    # Rate limit: max 3 attempts per email per hour
+    now = datetime.utcnow()
+    attempt = reset_attempts.get(email, {"count": 0, "last_attempt": now - timedelta(hours=1)})
+    if (now - attempt["last_attempt"]).total_seconds() < 3600:
+        if attempt["count"] >= 3:
+            return jsonify({"error": "Too many reset requests. Please try again in 1 hour"}), 429
+    else:
+        attempt = {"count": 0, "last_attempt": now}
+
+    attempt["count"] += 1
+    attempt["last_attempt"] = now
+    reset_attempts[email] = attempt
 
     try:
-        # Use Supabase auth to send reset email
+        # Validate redirect_to domain
+        redirect_to = request.args.get("redirect_to", f"{request.host_url}reset-password")
+        parsed = redirect_to.lower()
+        allowed = any(domain in parsed for domain in ALLOWED_REDIRECT_DOMAINS)
+
+        if not allowed:
+            current_app.logger.warning(f"Invalid redirect attempt: {redirect_to}")
+            redirect_to = f"{request.host_url}reset-password"  # fallback
+
         res = supabase.auth.reset_password_for_email(
             email,
-            redirect_to=f"{request.host_url}reset-password"
+            redirect_to=redirect_to
         )
 
         if res:
-            return jsonify({"message": "Reset link sent to your email"}), 200
+            return jsonify({"message": "If the email exists, a reset link has been sent"}), 200
         else:
             return jsonify({"error": "Failed to send reset email"}), 500
 
     except Exception as e:
-        current_app.logger.error(f"Forgot password error: {str(e)}")
+        current_app.logger.error(f"Forgot password error (email {email}): {str(e)}")
         return jsonify({"error": "Failed to process request"}), 500
 
 
@@ -363,7 +419,7 @@ def forgot_password():
 def reset_password():
     data = request.get_json()
     token = data.get("token")
-    password = data.get("password")
+    password = data.get("password", "").strip()
 
     if not token or not password:
         return jsonify({"error": "Token and password required"}), 400
@@ -372,10 +428,10 @@ def reset_password():
         return jsonify({"error": "Password must be at least 8 characters"}), 400
 
     try:
-        # Supabase handles token validation internally
         res = supabase.auth.update_user({"password": password})
 
         if res.user:
+            # Optional: invalidate all refresh tokens (Supabase handles via config)
             return jsonify({"message": "Password reset successful"}), 200
         else:
             return jsonify({"error": "Invalid or expired token"}), 400
@@ -387,7 +443,7 @@ def reset_password():
 
 # ────────────────────────────────────────────────
 # GET /api/auth/session
-# Get current session info (for Settings page)
+# Get current session info (authenticated)
 # ────────────────────────────────────────────────
 @bp.route("/auth/session", methods=["GET"])
 @jwt_required()
@@ -412,16 +468,18 @@ def get_session():
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Session fetch error: {str(e)}")
+        current_app.logger.error(f"Session fetch error (user {user_id}): {str(e)}")
         return jsonify({"error": "Failed to fetch session"}), 500
 
 
 # ────────────────────────────────────────────────
 # POST /api/auth/logout
-# Optional server-side logout (clear token blocklist if used)
+# Server-side logout (optional - invalidate token if using blocklist)
 # ────────────────────────────────────────────────
 @bp.route("/auth/logout", methods=["POST"])
 @jwt_required()
 def logout():
-    # If you implement JWT blocklist, add token here
-    return jsonify({"message": "Logged out"}), 200
+    # If using JWT blocklist (recommended for real logout):
+    # jti = get_jwt()["jti"]
+    # revoked_tokens.add(jti)
+    return jsonify({"message": "Logged out successfully"}), 200
