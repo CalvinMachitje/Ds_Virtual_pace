@@ -5,9 +5,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { useEffect } from "react";
 import { toast } from "sonner";
+import { AlertCircle } from "lucide-react";
+import { Skeleton } from "@/components/ui/skeleton";
 
 export default function AdminDashboard() {
-  const { isAdmin, userRole, loading } = useAuth(); // ← Use isAdmin and userRole from context
+  const { isAdmin, userRole, loading } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -20,7 +22,39 @@ export default function AdminDashboard() {
   }, [isAdmin, userRole, loading, navigate]);
 
   if (loading) {
-    return <div className="min-h-screen flex items-center justify-center text-white">Loading admin dashboard...</div>;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+        <div className="max-w-6xl mx-auto">
+          <Skeleton className="h-12 w-64 mb-8" />
+          <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {[...Array(9)].map((_, i) => (
+              <Card key={i} className="bg-slate-900/70 border-slate-700">
+                <CardHeader>
+                  <Skeleton className="h-8 w-48" />
+                </CardHeader>
+                <CardContent>
+                  <Skeleton className="h-20 w-full mb-4" />
+                  <Skeleton className="h-10 w-32" />
+                </CardContent>
+              </Card>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  if (!isAdmin || userRole !== "admin") {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+        <div className="text-center">
+          <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-500" />
+          <h2 className="text-2xl font-bold mb-2 text-white">Access Denied</h2>
+          <p className="text-slate-400 mb-6">This page is only available to administrators.</p>
+          <Button onClick={() => navigate("/dashboard")}>Go to Dashboard</Button>
+        </div>
+      </div>
+    );
   }
 
   return (

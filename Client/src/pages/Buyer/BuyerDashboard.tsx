@@ -51,7 +51,7 @@ const fetchBuyerDashboard = async () => {
         .eq("seller_id", va.id)
         .order("price", { ascending: true })
         .limit(1)
-        .single();
+        .maybeSingle();
 
       return {
         ...va,

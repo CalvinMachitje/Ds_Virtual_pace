@@ -1,4 +1,4 @@
-// src/components/layout/NavLayout.tsx   (recommended rename from BottomNav.tsx)
+// src/components/layout/NavLayout.tsx
 import { useState } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
@@ -22,6 +22,8 @@ import {
   CreditCard,
   Menu,
   X,
+  ChevronLeft,
+  ChevronRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
@@ -50,12 +52,13 @@ interface NavItem {
   section?: string;
 }
 
-export default function NavLayout() {
+export default function NavLayout({ children }: { children: React.ReactNode }) {
   const location = useLocation();
   const currentPath = location.pathname;
   const navigate = useNavigate();
   const { userRole, user, loading, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false); // sidebar collapse state
 
   // ────────────────────────────────────────────────
   // Unread message count (only for non-admin roles)
@@ -109,7 +112,7 @@ export default function NavLayout() {
   }, [user?.id, queryClient, userRole]);
 
   // ────────────────────────────────────────────────
-  // Navigation items
+  // Navigation items (unchanged)
   // ────────────────────────────────────────────────
   const navItems: NavItem[] = [
     { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard", exact: true, section: "general" },
@@ -183,132 +186,188 @@ export default function NavLayout() {
   ];
 
   // ────────────────────────────────────────────────
-  // Sidebar / Sheet Content (shared for desktop & mobile)
+  // Sidebar / Sheet Content (updated for collapse)
   // ────────────────────────────────────────────────
   const SidebarContent = () => (
-    <div className="flex flex-col h-full p-6">
-      <h2 className="text-2xl font-bold text-white mb-8 flex items-center gap-3">
-        {userRole === "admin" ? (
-          <>
-            <ShieldCheck className="h-7 w-7 text-blue-500" />
-            Admin Panel
-          </>
-        ) : (
-          <>
-            <LayoutDashboard className="h-7 w-7 text-blue-500" />
-            Dashboard
-          </>
-        )}
-      </h2>
+    <div className="flex flex-col h-full">
+      {/* Header with collapse toggle */}
+      <div className="flex items-center justify-between p-4 border-b border-slate-800">
+        <div className="flex items-center gap-3 overflow-hidden">
+          {userRole === "admin" ? (
+            <ShieldCheck className="h-7 w-7 text-blue-500 shrink-0" />
+          ) : (
+            <LayoutDashboard className="h-7 w-7 text-blue-500 shrink-0" />
+          )}
+          <h2 className={cn(
+            "text-2xl font-bold text-white whitespace-nowrap transition-opacity duration-200",
+            isCollapsed && "opacity-0 w-0"
+          )}>
+            {userRole === "admin" ? "Admin Panel" : "Dashboard"}
+          </h2>
+        </div>
 
-      <Accordion type="multiple" defaultValue={["general", "account"]} className="space-y-4 flex-1">
-        {/* General */}
-        <AccordionItem value="general" className="border-none">
-          <AccordionTrigger className="py-2 hover:no-underline">
-            <div className="flex items-center gap-3">
-              <LayoutDashboard className="h-5 w-5 text-slate-300" />
-              <span className="text-lg font-semibold text-slate-200">General</span>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="pb-2 pl-8">
-            <nav className="space-y-1">
-              {navItems
-                .filter((item) => item.section === "general")
-                .map((item) => (
-                  <SidebarLink key={item.path} item={item} isActive={currentPath === item.path || currentPath.startsWith(item.path + "/")} />
-                ))}
-            </nav>
-          </AccordionContent>
-        </AccordionItem>
+        {/* Collapse toggle button (desktop only) */}
+        <Button
+          variant="ghost"
+          size="icon"
+          className="hidden md:flex text-slate-400 hover:text-white shrink-0"
+          onClick={() => setIsCollapsed(!isCollapsed)}
+        >
+          {isCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
+        </Button>
+      </div>
 
-        {/* Marketplace */}
-        {(userRole === "buyer" || userRole === "seller") && (
-          <AccordionItem value="marketplace" className="border-none">
+      {/* Nav content – adjusts for collapse */}
+      <div className={cn(
+        "flex-1 overflow-y-auto transition-all duration-200 ease-out",
+        isCollapsed ? "w-16 px-2" : "w-64 px-4"
+      )}>
+        <Accordion type="multiple" defaultValue={["general", "account"]} className="space-y-3">
+          {/* General */}
+          <AccordionItem value="general" className="border-none">
             <AccordionTrigger className="py-2 hover:no-underline">
               <div className="flex items-center gap-3">
-                <Store className="h-5 w-5 text-slate-300" />
-                <span className="text-lg font-semibold text-slate-200">Marketplace</span>
+                <LayoutDashboard className="h-5 w-5 text-slate-300 shrink-0" />
+                <span className={cn("text-base font-medium text-slate-200 whitespace-nowrap transition-opacity duration-200", isCollapsed && "opacity-0 w-0")}>
+                  General
+                </span>
               </div>
             </AccordionTrigger>
-            <AccordionContent className="pb-2 pl-8">
+            <AccordionContent className="pb-2">
               <nav className="space-y-1">
                 {navItems
-                  .filter((item) => item.section === "marketplace")
+                  .filter((item) => item.section === "general")
                   .map((item) => (
-                    <SidebarLink key={item.path} item={item} isActive={currentPath === item.path || currentPath.startsWith(item.path + "/")} />
+                    <SidebarLink
+                      key={item.path}
+                      item={item}
+                      isActive={currentPath === item.path || currentPath.startsWith(item.path + "/")}
+                      isCollapsed={isCollapsed}
+                    />
                   ))}
               </nav>
             </AccordionContent>
           </AccordionItem>
-        )}
 
-        {/* Admin Tools */}
-        {userRole === "admin" && (
-          <AccordionItem value="admin" className="border-none">
+          {/* Marketplace */}
+          {(userRole === "buyer" || userRole === "seller") && (
+            <AccordionItem value="marketplace" className="border-none">
+              <AccordionTrigger className="py-2 hover:no-underline">
+                <div className="flex items-center gap-3">
+                  <Store className="h-5 w-5 text-slate-300 shrink-0" />
+                  <span className={cn("text-base font-medium text-slate-200 whitespace-nowrap transition-opacity duration-200", isCollapsed && "opacity-0 w-0")}>
+                    Marketplace
+                  </span>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="pb-2">
+                <nav className="space-y-1">
+                  {navItems
+                    .filter((item) => item.section === "marketplace")
+                    .map((item) => (
+                      <SidebarLink
+                        key={item.path}
+                        item={item}
+                        isActive={currentPath === item.path || currentPath.startsWith(item.path + "/")}
+                        isCollapsed={isCollapsed}
+                      />
+                    ))}
+                </nav>
+              </AccordionContent>
+            </AccordionItem>
+          )}
+
+          {/* Admin Tools */}
+          {userRole === "admin" && (
+            <AccordionItem value="admin" className="border-none">
+              <AccordionTrigger className="py-2 hover:no-underline">
+                <div className="flex items-center gap-3">
+                  <Wrench className="h-5 w-5 text-slate-300 shrink-0" />
+                  <span className={cn("text-base font-medium text-slate-200 whitespace-nowrap transition-opacity duration-200", isCollapsed && "opacity-0 w-0")}>
+                    Admin Tools
+                  </span>
+                </div>
+              </AccordionTrigger>
+              <AccordionContent className="pb-2">
+                <nav className="space-y-1">
+                  {navItems
+                    .filter((item) => item.adminOnly)
+                    .map((item) => (
+                      <SidebarLink
+                        key={item.path}
+                        item={item}
+                        isActive={currentPath === item.path || currentPath.startsWith(item.path + "/")}
+                        isCollapsed={isCollapsed}
+                      />
+                    ))}
+                </nav>
+              </AccordionContent>
+            </AccordionItem>
+          )}
+
+          {/* Account */}
+          <AccordionItem value="account" className="border-none">
             <AccordionTrigger className="py-2 hover:no-underline">
               <div className="flex items-center gap-3">
-                <Wrench className="h-5 w-5 text-slate-300" />
-                <span className="text-lg font-semibold text-slate-200">Admin Tools</span>
+                <UserCircle className="h-5 w-5 text-slate-300 shrink-0" />
+                <span className={cn("text-base font-medium text-slate-200 whitespace-nowrap transition-opacity duration-200", isCollapsed && "opacity-0 w-0")}>
+                  Account
+                </span>
               </div>
             </AccordionTrigger>
-            <AccordionContent className="pb-2 pl-8">
+            <AccordionContent className="pb-2">
               <nav className="space-y-1">
                 {navItems
-                  .filter((item) => item.adminOnly)
+                  .filter((item) => item.section === "account" && !item.onClick)
                   .map((item) => (
-                    <SidebarLink key={item.path} item={item} isActive={currentPath === item.path || currentPath.startsWith(item.path + "/")} />
+                    <SidebarLink
+                      key={item.path}
+                      item={item}
+                      isActive={currentPath === item.path || currentPath.startsWith(item.path + "/")}
+                      isCollapsed={isCollapsed}
+                    />
                   ))}
+
+                {navItems.find((item) => item.onClick) && (
+                  <button
+                    onClick={navItems.find((item) => item.onClick)?.onClick}
+                    className={cn(
+                      "w-full flex items-center gap-3 px-4 py-3 rounded-lg text-red-400 hover:bg-red-950/30 hover:text-red-300 transition-colors",
+                      isCollapsed && "justify-center px-3"
+                    )}
+                  >
+                    <LogOut className="h-5 w-5 shrink-0" />
+                    <span className={cn("whitespace-nowrap transition-opacity duration-200", isCollapsed && "opacity-0 w-0")}>Logout</span>
+                  </button>
+                )}
               </nav>
             </AccordionContent>
           </AccordionItem>
-        )}
-
-        {/* Account */}
-        <AccordionItem value="account" className="border-none">
-          <AccordionTrigger className="py-2 hover:no-underline">
-            <div className="flex items-center gap-3">
-              <UserCircle className="h-5 w-5 text-slate-300" />
-              <span className="text-lg font-semibold text-slate-200">Account</span>
-            </div>
-          </AccordionTrigger>
-          <AccordionContent className="pb-2 pl-8">
-            <nav className="space-y-1">
-              {navItems
-                .filter((item) => item.section === "account" && !item.onClick)
-                .map((item) => (
-                  <SidebarLink key={item.path} item={item} isActive={currentPath === item.path || currentPath.startsWith(item.path + "/")} />
-                ))}
-
-              {navItems.find((item) => item.onClick) && (
-                <button
-                  onClick={navItems.find((item) => item.onClick)?.onClick}
-                  className="w-full flex items-center gap-3 px-4 py-3 rounded-lg text-red-400 hover:bg-red-950/30 hover:text-red-300 transition-colors"
-                >
-                  <LogOut className="h-5 w-5" />
-                  <span>Logout</span>
-                </button>
-              )}
-            </nav>
-          </AccordionContent>
-        </AccordionItem>
-      </Accordion>
+        </Accordion>
+      </div>
     </div>
   );
 
   // ────────────────────────────────────────────────
-  // Sidebar Link
+  // Sidebar Link (updated for collapse)
   // ────────────────────────────────────────────────
-  const SidebarLink = ({ item, isActive }: { item: NavItem; isActive: boolean }) => (
+  const SidebarLink = ({ item, isActive, isCollapsed }: { item: NavItem; isActive: boolean; isCollapsed: boolean }) => (
     <Link
       to={item.path}
       className={cn(
-        "flex items-center gap-3 px-4 py-3 rounded-lg transition-colors",
-        isActive ? "bg-blue-600/20 text-blue-400" : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200"
+        "flex items-center gap-3 px-4 py-3 rounded-lg transition-colors group relative",
+        isActive ? "bg-blue-600/20 text-blue-400" : "text-slate-400 hover:bg-slate-800/50 hover:text-slate-200",
+        isCollapsed && "justify-center px-3"
       )}
       onClick={() => setMobileOpen(false)}
     >
-      <item.icon className="h-5 w-5" />
-      <span>{item.label}</span>
+      <item.icon className="h-5 w-5 shrink-0" />
+      <span className={cn(
+        "transition-all duration-200 ease-out",
+        isCollapsed ? "opacity-0 w-0 group-hover:opacity-100 group-hover:w-auto absolute left-16 bg-slate-950/95 px-4 py-3 rounded-r-lg shadow-xl z-50" : ""
+      )}>
+        {item.label}
+      </span>
       {item.badge !== undefined && item.badge > 0 && (
         <span className="ml-auto bg-red-500 text-white text-xs font-bold px-2 py-1 rounded-full">
           {item.badge}
@@ -321,15 +380,46 @@ export default function NavLayout() {
   // Render
   // ────────────────────────────────────────────────
   return (
-    <>
-      {/* Desktop fixed sidebar (md+ screens) */}
-      <aside className="hidden md:block fixed inset-y-0 left-0 w-64 bg-slate-950/90 border-r border-slate-800 z-40 overflow-y-auto">
+    <div className="flex min-h-screen flex-col md:flex-row">
+      {/* Desktop fixed sidebar (collapsible) */}
+      <aside
+        className={cn(
+          "hidden md:block fixed inset-y-0 left-0 z-40 bg-slate-950/90 border-r border-slate-800 overflow-hidden shadow-2xl transition-all duration-200 ease-out will-change-transform",
+          isCollapsed ? "w-16" : "w-64"
+        )}
+      >
         <SidebarContent />
       </aside>
 
       {/* Mobile hamburger trigger + slide-in sheet */}
-      {userRole !== "admin" ? (
-        // Only show bottom nav for non-admin roles
+      <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
+        <SheetTrigger asChild className="md:hidden fixed top-4 left-4 z-50">
+          <Button variant="ghost" size="icon" className="text-white bg-slate-900/50 backdrop-blur-sm">
+            <Menu className="h-6 w-6" />
+          </Button>
+        </SheetTrigger>
+        <SheetContent side="left" className="w-72 bg-slate-950 border-slate-800 p-0 z-50">
+          <SidebarContent />
+        </SheetContent>
+      </Sheet>
+
+      {/* Main content area – adjusts dynamically */}
+      <main
+        className={cn(
+          "flex-1 transition-all duration-200 ease-out will-change-margin",
+          "pt-16 md:pt-0",
+          "pb-24 md:pb-6",
+          isCollapsed ? "md:ml-16" : "md:ml-64",
+          "max-w-[calc(100%-4rem)] md:max-w-none",
+          "mx-auto md:mx-0",
+          "px-4 sm:px-6 lg:px-8"
+        )}
+      >
+        {children}
+      </main>
+
+      {/* Mobile bottom navigation – only for non-admin roles */}
+      {userRole !== "admin" && (
         <nav className="fixed bottom-0 left-0 right-0 z-50 bg-slate-950/90 backdrop-blur-lg border-t border-slate-800 md:hidden">
           <div className="flex justify-around h-16 px-2">
             {navItems.map((item) => {
@@ -371,19 +461,7 @@ export default function NavLayout() {
             })}
           </div>
         </nav>
-      ) : (
-        // Admin: only hamburger menu (no bottom nav)
-        <Sheet open={mobileOpen} onOpenChange={setMobileOpen}>
-          <SheetTrigger asChild className="md:hidden fixed top-4 left-4 z-50">
-            <Button variant="ghost" size="icon" className="text-white">
-              <Menu className="h-6 w-6" />
-            </Button>
-          </SheetTrigger>
-          <SheetContent side="left" className="w-72 bg-slate-950 border-slate-800 p-0">
-            <SidebarContent />
-          </SheetContent>
-        </Sheet>
       )}
-    </>
+    </div>
   );
 }

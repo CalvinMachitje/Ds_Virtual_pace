@@ -30,7 +30,7 @@ const fetchReviewBooking = async (id: string) => {
     .from("bookings")
     .select("id, seller_name, role, service, start_time, duration, price, fee, taxes, total, payment_method, avatar_url")
     .eq("id", id)
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
   return data as Booking;

@@ -27,7 +27,7 @@ const fetchVerification = async (id: string) => {
     .from("profiles")
     .select("trust_score, jobs_done, rating") // Assume these columns exist or add them
     .eq("id", id)
-    .single();
+    .maybeSingle();
 
   if (error) throw error;
 

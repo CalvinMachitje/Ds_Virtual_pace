@@ -110,7 +110,7 @@ export default function BuyerProfile() {
           .from("profiles")
           .select("id, full_name, role, bio, avatar_url, phone, created_at, updated_at, is_verified, interests")
           .eq("id", id)
-          .single();
+          .maybeSingle();
 
         if (profileError) throw profileError;
         if (!profileData) throw new Error("Profile not found");

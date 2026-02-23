@@ -73,7 +73,7 @@ const BuyerLayout = () => (
     <main className="flex-1 pb-20 md:pb-0 overflow-y-auto">
       <Outlet />
     </main>
-    <BottomNav />
+    <BottomNav children={""} />
   </div>
 );
 
@@ -84,7 +84,7 @@ const AdminLayout = () => (
     <main className="flex-1 pb-20 md:pb-0 overflow-y-auto">
       <Outlet />
     </main>
-    <BottomNav />
+    <BottomNav children={""} />
   </div>
 );
 

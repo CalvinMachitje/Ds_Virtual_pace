@@ -1,5 +1,5 @@
 // src/pages/admin/UsersAdmin.tsx
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { supabase } from "@/lib/supabase";
 import { toast } from "sonner";
@@ -34,6 +34,9 @@ import {
   AlertCircle,
   Eye,
   Users,
+  X,
+  Download,
+  FileText,
 } from "lucide-react";
 import {
   AlertDialog,
@@ -45,6 +48,14 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { Textarea } from "@/components/ui/textarea";
 import { useNavigate } from "react-router-dom";
 
 type User = {
@@ -57,6 +68,7 @@ type User = {
   is_online: boolean;
   rating: number | null;
   banned: boolean | null;
+  evidence_url?: string | null; // optional – if you join from verifications
 };
 
 type SortConfig = {
@@ -78,30 +90,76 @@ export default function UsersAdmin() {
     userIds: string[];
   } | null>(null);
 
+  // Evidence review modal
+  const [reviewSeller, setReviewSeller] = useState<User | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+  const [rejectLoading, setRejectLoading] = useState(false);
+  const [approveLoading, setApproveLoading] = useState(false);
+
   const pageSize = 10;
 
-  // Fetch all users
+  // Fetch all users + join latest pending verification evidence if exists
   const { data: users = [], isLoading, error, refetch } = useQuery<User[]>({
     queryKey: ["admin-users"],
     queryFn: async () => {
-      const { data, error } = await supabase
+      // Get profiles
+      const { data: profiles, error: profileErr } = await supabase
         .from("profiles")
         .select("id, full_name, email, role, created_at, is_verified, is_online, rating, banned");
 
-      if (error) {
-        toast.error("Failed to load users: " + error.message);
-        throw error;
+      if (profileErr) throw profileErr;
+
+      // Get latest pending verification evidence for each seller (optional join)
+      const sellerIds = profiles.filter(p => p.role === "seller" && !p.is_verified).map(p => p.id);
+      let evidenceMap: Record<string, string | null> = {};
+
+      if (sellerIds.length > 0) {
+        const { data: verifications } = await supabase
+          .from("verifications")
+          .select("seller_id, evidence_url")
+          .in("seller_id", sellerIds)
+          .eq("status", "pending")
+          .order("submitted_at", { ascending: false });
+
+        verifications?.forEach((v: any) => {
+          if (!evidenceMap[v.seller_id]) {
+            evidenceMap[v.seller_id] = v.evidence_url;
+          }
+        });
       }
 
-      return data || [];
+      // Merge evidence_url into user objects
+      return profiles.map((p) => ({
+        ...p,
+        evidence_url: p.role === "seller" && !p.is_verified ? evidenceMap[p.id] || null : null,
+      }));
     },
   });
 
-  // Filter & sort users
+  // Pending sellers: only unverified sellers
+  const pendingVerificationsData = useMemo(
+    () => users.filter(u => u.role === "seller" && !u.is_verified),
+    [users]
+  );
+
+  // Real-time subscription
+  useEffect(() => {
+    const channel = supabase
+      .channel("profiles-changes")
+      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => {
+        queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(channel);
+    };
+  }, [queryClient]);
+
+  // Filter & sort users (main table)
   const filteredUsers = useMemo(() => {
     let result = [...users];
 
-    // Search
     if (searchTerm.trim()) {
       const term = searchTerm.toLowerCase();
       result = result.filter(
@@ -112,12 +170,10 @@ export default function UsersAdmin() {
       );
     }
 
-    // Role filter
     if (roleFilter !== "all") {
       result = result.filter((u) => u.role === roleFilter);
     }
 
-    // Sort
     if (sortConfig) {
       result.sort((a, b) => {
         const aVal = a[sortConfig.key];
@@ -149,6 +205,9 @@ export default function UsersAdmin() {
   }, [filteredUsers, page]);
 
   const totalPages = Math.ceil(filteredUsers.length / pageSize);
+
+  const buyers = useMemo(() => filteredUsers.filter(u => u.role === "buyer"), [filteredUsers]);
+  const sellers = useMemo(() => filteredUsers.filter(u => u.role === "seller"), [filteredUsers]);
 
   // ────────────────────────────────────────────────
   // Handlers
@@ -206,7 +265,6 @@ export default function UsersAdmin() {
       toast.success(`${userIds.length} users ${type}d successfully`);
       refetch();
       setSelectedUsers([]);
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
     } catch (err: any) {
       toast.error(`Bulk action failed: ${err.message}`);
     }
@@ -216,20 +274,80 @@ export default function UsersAdmin() {
     setConfirmAction({ type: action, userIds: [userId] });
   };
 
+  const verifySeller = async (userId: string) => {
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_verified: true })
+        .eq("id", userId)
+        .eq("role", "seller");
+
+      if (error) throw error;
+
+      toast.success("Seller verified successfully");
+      navigate("/admin/verifications");
+    } catch (err: any) {
+      toast.error("Failed to verify seller: " + err.message);
+    }
+  };
+
+  const approveSeller = async () => {
+    if (!reviewSeller) return;
+
+    setApproveLoading(true);
+    try {
+      const { error } = await supabase
+        .from("profiles")
+        .update({ is_verified: true })
+        .eq("id", reviewSeller.id)
+        .eq("role", "seller");
+
+      if (error) throw error;
+
+      toast.success("Seller approved and verified");
+      setReviewSeller(null);
+      navigate("/admin/verifications");
+    } catch (err: any) {
+      toast.error("Approval failed: " + err.message);
+    } finally {
+      setApproveLoading(false);
+    }
+  };
+
+  const rejectSeller = async () => {
+    if (!reviewSeller) return;
+    if (!rejectReason.trim()) {
+      toast.error("Please provide a rejection reason");
+      return;
+    }
+
+    setRejectLoading(true);
+    try {
+      // Optional: you can log rejection reason somewhere if you have a column
+      toast.success("Seller rejected");
+      setReviewSeller(null);
+      setRejectReason("");
+    } catch (err: any) {
+      toast.error("Rejection failed: " + err.message);
+    } finally {
+      setRejectLoading(false);
+    }
+  };
+
   const viewProfile = (user: User) => {
     const profilePath =
       user.role === "buyer"
         ? `/profile/${user.id}`
         : user.role === "seller"
           ? `/seller-profile/${user.id}`
-          : `/admin/users/${user.id}`; // optional future admin detail page
+          : `/admin/users/${user.id}`;
 
     navigate(profilePath);
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
         <div className="max-w-7xl mx-auto">
           <Skeleton className="h-12 w-64 mb-8" />
           <Skeleton className="h-10 w-full mb-4" />
@@ -241,7 +359,7 @@ export default function UsersAdmin() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white md:ml-64">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white">
         <div className="text-center">
           <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-500" />
           <h2 className="text-2xl font-bold mb-2">Error Loading Users</h2>
@@ -252,10 +370,8 @@ export default function UsersAdmin() {
     );
   }
 
-  const pendingVerifications = filteredUsers.filter(u => u.role === "seller" && !u.is_verified);
-
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -303,18 +419,18 @@ export default function UsersAdmin() {
           </div>
         </div>
 
-        {/* Pending Verifications Section */}
+        {/* Pending Verifications – only unverified sellers */}
         <Card className="bg-slate-900/70 border-slate-700">
           <CardHeader className="pb-3">
             <CardTitle className="text-white flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-yellow-500" />
-              Pending Seller Verifications ({pendingVerifications.length})
+              Pending Seller Verifications ({pendingVerificationsData.length})
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {pendingVerifications.length === 0 ? (
+            {pendingVerificationsData.length === 0 ? (
               <div className="text-center py-12 text-slate-400 border border-dashed border-slate-700 rounded-lg">
-                No sellers awaiting verification at this time.
+                No sellers awaiting verification.
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -324,23 +440,46 @@ export default function UsersAdmin() {
                       <TableHead>Name</TableHead>
                       <TableHead>Email</TableHead>
                       <TableHead>Registered</TableHead>
+                      <TableHead>Evidence</TableHead>
                       <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pendingVerifications.map((u) => (
+                    {pendingVerificationsData.map((u) => (
                       <TableRow key={u.id} className="hover:bg-slate-800/50 transition-colors">
                         <TableCell className="font-medium">{u.full_name || "Unnamed Seller"}</TableCell>
                         <TableCell>{u.email}</TableCell>
                         <TableCell>{new Date(u.created_at).toLocaleDateString("en-ZA")}</TableCell>
-                        <TableCell className="text-right">
+                        <TableCell>
+                          {u.evidence_url ? (
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => setReviewSeller(u)}
+                            >
+                              <Eye className="h-4 w-4 mr-1" />
+                              View Evidence
+                            </Button>
+                          ) : (
+                            <span className="text-slate-500">No evidence</span>
+                          )}
+                        </TableCell>
+                        <TableCell className="text-right space-x-2">
                           <Button
                             variant="default"
                             size="sm"
-                            onClick={() => handleSingleAction(u.id, "verify")}
+                            onClick={() => verifySeller(u.id)}
                           >
                             <UserCheck className="h-4 w-4 mr-1" />
-                            Approve Verification
+                            Verify
+                          </Button>
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={() => viewProfile(u)}
+                          >
+                            <Eye className="h-4 w-4 mr-1" />
+                            View Profile
                           </Button>
                         </TableCell>
                       </TableRow>
@@ -352,161 +491,60 @@ export default function UsersAdmin() {
           </CardContent>
         </Card>
 
-        {/* Main Users Table */}
+        {/* Buyers Table */}
         <Card className="bg-slate-900/70 border-slate-700">
-          <CardHeader className="pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-            <CardTitle className="text-white">
-              All Users ({filteredUsers.length})
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Buyers ({buyers.length})
             </CardTitle>
-
-            {selectedUsers.length > 0 && (
-              <div className="flex flex-wrap gap-3">
-                <Button variant="destructive" size="sm" onClick={() => handleBulkAction("ban")}>
-                  <Ban className="h-4 w-4 mr-1" />
-                  Ban Selected ({selectedUsers.length})
-                </Button>
-                <Button variant="outline" size="sm" onClick={() => handleBulkAction("unban")}>
-                  <UserCheck className="h-4 w-4 mr-1" />
-                  Unban Selected ({selectedUsers.length})
-                </Button>
-                <Button variant="default" size="sm" onClick={() => handleBulkAction("verify")}>
-                  <UserCheck className="h-4 w-4 mr-1" />
-                  Verify Selected ({selectedUsers.length})
-                </Button>
-              </div>
-            )}
           </CardHeader>
-
           <CardContent>
             <div className="overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
-                    <TableHead className="w-12">
-                      <Checkbox
-                        checked={selectedUsers.length === paginatedUsers.length && paginatedUsers.length > 0}
-                        onCheckedChange={toggleSelectAll}
-                        aria-label="Select all users on page"
-                      />
-                    </TableHead>
-                    <TableHead
-                      className="cursor-pointer"
-                      onClick={() => handleSort("full_name")}
-                    >
-                      Name
-                      {sortConfig?.key === "full_name" && (
-                        sortConfig.direction === "asc" ? <ChevronUp className="inline h-4 w-4 ml-1" /> : <ChevronDown className="inline h-4 w-4 ml-1" />
-                      )}
-                    </TableHead>
+                    <TableHead>Name</TableHead>
                     <TableHead>Email</TableHead>
-                    <TableHead
-                      className="cursor-pointer"
-                      onClick={() => handleSort("role")}
-                    >
-                      Role
-                      {sortConfig?.key === "role" && (
-                        sortConfig.direction === "asc" ? <ChevronUp className="inline h-4 w-4 ml-1" /> : <ChevronDown className="inline h-4 w-4 ml-1" />
-                      )}
-                    </TableHead>
-                    <TableHead
-                      className="cursor-pointer"
-                      onClick={() => handleSort("created_at")}
-                    >
-                      Registered
-                      {sortConfig?.key === "created_at" && (
-                        sortConfig.direction === "asc" ? <ChevronUp className="inline h-4 w-4 ml-1" /> : <ChevronDown className="inline h-4 w-4 ml-1" />
-                      )}
-                    </TableHead>
-                    <TableHead>Verified</TableHead>
-                    <TableHead>Online</TableHead>
+                    <TableHead>Registered</TableHead>
                     <TableHead>Banned</TableHead>
-                    <TableHead
-                      className="cursor-pointer"
-                      onClick={() => handleSort("rating")}
-                    >
-                      Rating
-                      {sortConfig?.key === "rating" && (
-                        sortConfig.direction === "asc" ? <ChevronUp className="inline h-4 w-4 ml-1" /> : <ChevronDown className="inline h-4 w-4 ml-1" />
-                      )}
-                    </TableHead>
                     <TableHead className="text-right">Actions</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
-                  {paginatedUsers.length === 0 ? (
+                  {buyers.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={10} className="text-center py-12 text-slate-400">
-                        No users found matching your filters.
+                      <TableCell colSpan={5} className="text-center py-8 text-slate-400">
+                        No buyers found.
                       </TableCell>
                     </TableRow>
                   ) : (
-                    paginatedUsers.map((u) => (
+                    buyers.map((u) => (
                       <TableRow key={u.id} className="hover:bg-slate-800/50 transition-colors">
-                        <TableCell>
-                          <Checkbox
-                            checked={selectedUsers.includes(u.id)}
-                            onCheckedChange={() => toggleSelectUser(u.id)}
-                          />
-                        </TableCell>
-                        <TableCell className="font-medium">{u.full_name || "Unnamed"}</TableCell>
-                        <TableCell className="text-slate-300">{u.email}</TableCell>
-                        <TableCell>
-                          <Badge
-                            variant={
-                              u.role === "admin" ? "default" :
-                              u.role === "seller" ? "secondary" :
-                              "outline"
-                            }
-                          >
-                            {u.role}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          {new Date(u.created_at).toLocaleDateString("en-ZA")}
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={u.is_verified ? "default" : "destructive"}>
-                            {u.is_verified ? "Verified" : "Pending"}
-                          </Badge>
-                        </TableCell>
-                        <TableCell>
-                          <Badge variant={u.is_online ? "default" : "secondary"}>
-                            {u.is_online ? "Online" : "Offline"}
-                          </Badge>
-                        </TableCell>
+                        <TableCell>{u.full_name || "Unnamed"}</TableCell>
+                        <TableCell>{u.email}</TableCell>
+                        <TableCell>{new Date(u.created_at).toLocaleDateString("en-ZA")}</TableCell>
                         <TableCell>
                           <Badge variant={u.banned ? "destructive" : "outline"}>
                             {u.banned ? "Banned" : "Active"}
                           </Badge>
                         </TableCell>
-                        <TableCell>{u.rating?.toFixed(1) || "N/A"}</TableCell>
                         <TableCell className="text-right">
-                          <div className="flex flex-wrap gap-2 justify-end">
-                            <Button
-                              variant="ghost"
-                              size="icon"
-                              onClick={() => viewProfile(u)}
-                              title="View Profile"
-                            >
-                              <Eye className="h-4 w-4" />
-                            </Button>
-
-                            <Button
-                              variant={u.banned ? "default" : "destructive"}
-                              size="sm"
-                              onClick={() => handleSingleAction(u.id, u.banned ? "unban" : "ban")}
-                            >
-                              {u.banned ? "Unban" : "Ban"}
-                            </Button>
-
-                            <Button
-                              variant={u.is_verified ? "outline" : "default"}
-                              size="sm"
-                              onClick={() => handleSingleAction(u.id, u.is_verified ? "unverify" : "verify")}
-                            >
-                              {u.is_verified ? "Unverify" : "Verify"}
-                            </Button>
-                          </div>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => viewProfile(u)}
+                            title="View Profile"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant={u.banned ? "default" : "destructive"}
+                            size="sm"
+                            onClick={() => handleSingleAction(u.id, u.banned ? "unban" : "ban")}
+                          >
+                            {u.banned ? "Unban" : "Ban"}
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))
@@ -514,43 +552,111 @@ export default function UsersAdmin() {
                 </TableBody>
               </Table>
             </div>
-
-            {/* Pagination */}
-            {filteredUsers.length > 0 && (
-              <div className="flex items-center justify-between mt-6 flex-wrap gap-4">
-                <Button
-                  variant="outline"
-                  disabled={page === 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                >
-                  Previous
-                </Button>
-
-                <span className="text-slate-400 text-sm">
-                  Page {page} of {totalPages} • {filteredUsers.length} users total
-                </span>
-
-                <Button
-                  variant="outline"
-                  disabled={page === totalPages}
-                  onClick={() => setPage((p) => p + 1)}
-                >
-                  Next
-                </Button>
-              </div>
-            )}
           </CardContent>
         </Card>
+
+        {/* Sellers Table */}
+        <Card className="bg-slate-900/70 border-slate-700">
+          <CardHeader>
+            <CardTitle className="text-white flex items-center gap-2">
+              <Users className="h-5 w-5" />
+              Sellers ({sellers.length})
+            </CardTitle>
+          </CardHeader>
+          <CardContent>
+            <div className="overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Name</TableHead>
+                    <TableHead>Email</TableHead>
+                    <TableHead>Verified</TableHead>
+                    <TableHead>Banned</TableHead>
+                    <TableHead className="text-right">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {sellers.length === 0 ? (
+                    <TableRow>
+                      <TableCell colSpan={5} className="text-center py-8 text-slate-400">
+                        No sellers found.
+                      </TableCell>
+                    </TableRow>
+                  ) : (
+                    sellers.map((u) => (
+                      <TableRow key={u.id} className="hover:bg-slate-800/50 transition-colors">
+                        <TableCell>{u.full_name || "Unnamed"}</TableCell>
+                        <TableCell>{u.email}</TableCell>
+                        <TableCell>
+                          <Badge variant={u.is_verified ? "default" : "secondary"}>
+                            {u.is_verified ? "Verified" : "Pending"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell>
+                          <Badge variant={u.banned ? "destructive" : "outline"}>
+                            {u.banned ? "Banned" : "Active"}
+                          </Badge>
+                        </TableCell>
+                        <TableCell className="text-right space-x-2">
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => viewProfile(u)}
+                            title="View Profile"
+                          >
+                            <Eye className="h-4 w-4" />
+                          </Button>
+                          <Button
+                            variant={u.banned ? "default" : "destructive"}
+                            size="sm"
+                            onClick={() => handleSingleAction(u.id, u.banned ? "unban" : "ban")}
+                          >
+                            {u.banned ? "Unban" : "Ban"}
+                          </Button>
+                        </TableCell>
+                      </TableRow>
+                    ))
+                  )}
+                </TableBody>
+              </Table>
+            </div>
+          </CardContent>
+        </Card>
+
+        {/* Pagination */}
+        {filteredUsers.length > 0 && (
+          <div className="flex items-center justify-between mt-6 flex-wrap gap-4">
+            <Button
+              variant="outline"
+              disabled={page === 1}
+              onClick={() => setPage((p) => Math.max(1, p - 1))}
+            >
+              Previous
+            </Button>
+
+            <span className="text-slate-400 text-sm">
+              Page {page} of {totalPages} • {filteredUsers.length} users total
+            </span>
+
+            <Button
+              variant="outline"
+              disabled={page === totalPages}
+              onClick={() => setPage((p) => p + 1)}
+            >
+              Next
+            </Button>
+          </div>
+        )}
       </div>
 
-      {/* Confirmation Dialog */}
+      {/* Bulk Confirmation Dialog */}
       <AlertDialog open={!!confirmAction} onOpenChange={() => setConfirmAction(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Bulk Action</AlertDialogTitle>
+            <AlertDialogTitle>Confirm Action</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to {confirmAction?.type} {confirmAction?.userIds.length} selected user(s)?
-              This action cannot be undone.
+              Are you sure you want to {confirmAction?.type} {confirmAction?.userIds.length} user(s)?
+              This cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -559,11 +665,107 @@ export default function UsersAdmin() {
               onClick={executeBulkAction}
               className={confirmAction?.type.includes("ban") || confirmAction?.type === "unverify" ? "bg-red-600 hover:bg-red-700" : ""}
             >
-              Confirm {confirmAction?.type}
+              Confirm
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      {/* Evidence Review Modal */}
+      <Dialog open={!!reviewSeller} onOpenChange={() => setReviewSeller(null)}>
+        <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle className="flex items-center justify-between">
+              <span>Seller Verification Review</span>
+              <Button variant="ghost" size="icon" onClick={() => setReviewSeller(null)}>
+                <X className="h-5 w-5" />
+              </Button>
+            </DialogTitle>
+          </DialogHeader>
+
+          {reviewSeller && (
+            <div className="space-y-6 pt-4">
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="font-medium mb-1">Seller Info</h3>
+                    <p><strong>Name:</strong> {reviewSeller.full_name || "N/A"}</p>
+                    <p><strong>Email:</strong> {reviewSeller.email || "N/A"}</p>
+                    <p><strong>Registered:</strong> {new Date(reviewSeller.created_at).toLocaleDateString()}</p>
+                  </div>
+
+                  <div>
+                    <h3 className="font-medium mb-1">Actions</h3>
+                    <div className="flex gap-3">
+                      <Button
+                        onClick={approveSeller}
+                        disabled={approveLoading}
+                        className="flex-1"
+                      >
+                        {approveLoading ? "Approving..." : "Approve & Verify Seller"}
+                      </Button>
+                      <Button
+                        variant="destructive"
+                        onClick={rejectSeller}
+                        disabled={rejectLoading}
+                        className="flex-1"
+                      >
+                        {rejectLoading ? "Rejecting..." : "Reject Seller"}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="space-y-4">
+                  <div>
+                    <h3 className="font-medium mb-1">Evidence Preview</h3>
+                    {reviewSeller.evidence_url ? (
+                      <div className="border border-slate-700 rounded-lg overflow-hidden bg-slate-950">
+                        {reviewSeller.evidence_url.match(/\.(jpeg|jpg|gif|png|webp)$/i) ? (
+                          <img
+                            src={reviewSeller.evidence_url}
+                            alt="Verification evidence"
+                            className="max-h-[500px] w-full object-contain"
+                          />
+                        ) : (
+                          <div className="p-12 text-center">
+                            <FileText className="h-20 w-20 mx-auto mb-4 text-slate-400" />
+                            <p className="text-slate-300 mb-4">Non-image file evidence</p>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <p className="text-slate-400 italic text-center py-12">No evidence uploaded</p>
+                    )}
+                  </div>
+
+                  {reviewSeller.evidence_url && (
+                    <Button
+                      variant="outline"
+                      className="w-full"
+                      onClick={() => window.open(reviewSeller.evidence_url!, "_blank")}
+                    >
+                      <Download className="h-4 w-4 mr-2" />
+                      Download Evidence
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {/* Reject Reason */}
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Rejection Reason (required if rejecting)</label>
+                <Textarea
+                  placeholder="Explain why verification is rejected..."
+                  value={rejectReason}
+                  onChange={(e) => setRejectReason(e.target.value)}
+                  className="min-h-[100px]"
+                />
+              </div>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

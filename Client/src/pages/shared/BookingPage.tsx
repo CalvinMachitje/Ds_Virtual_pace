@@ -60,7 +60,7 @@ const fetchBooking = async (bookingId: string, currentUserId: string): Promise<E
     `
     )
     .eq("id", bookingId)
-    .single();
+    .maybeSingle();
 
   if (bookingError || !booking) {
     throw bookingError || new Error("Booking not found");
@@ -71,14 +71,14 @@ const fetchBooking = async (bookingId: string, currentUserId: string): Promise<E
     .from("profiles")
     .select("full_name, avatar_url")
     .eq("id", booking.buyer_id)
-    .single();
+    .maybeSingle();
 
   // 3. Seller profile
   const { data: sellerProfile } = await supabase
     .from("profiles")
     .select("full_name, avatar_url")
     .eq("id", booking.seller_id)
-    .single();
+    .maybeSingle();
 
   // 4. Determine other party
   const isBuyer = booking.buyer_id === currentUserId;

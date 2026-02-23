@@ -74,7 +74,7 @@ export default function EditGig() {
         .select("*")
         .eq("id", id)
         .eq("seller_id", user!.id)
-        .single();
+        .maybeSingle();
 
       if (error) throw error;
       if (!data) throw new Error("Gig not found or you don't own it");

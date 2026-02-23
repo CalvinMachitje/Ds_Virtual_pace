@@ -21,7 +21,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Loader2, Upload, X, ArrowLeft } from "lucide-react";
-import { useState, useRef } from "react";
+import { useState, useRef, useEffect } from "react";
 import { cn } from "@/lib/utils";
 
 // ── Schema ────────────────────────────────────────────────
@@ -55,9 +55,36 @@ type GigForm = z.infer<typeof gigSchema>;
 
 // ── Component ─────────────────────────────────────────────
 export default function CreateGig() {
-  const { user } = useAuth();
+  const { user, userRole } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+
+  // Block unverified sellers
+  useEffect(() => {
+    if (userRole !== "seller" || !user?.id) return;
+
+    const checkVerification = async () => {
+      const { data, error } = await supabase
+        .from("profiles")
+        .select("is_verified")
+        .eq("id", user.id)
+        .single();
+
+      if (error) {
+        console.error("Verification check failed:", error);
+        toast.error("Could not verify your account status");
+        navigate("/seller-profile");
+        return;
+      }
+
+      if (!data?.is_verified) {
+        toast.error("You must be verified before creating gigs. Please wait for admin approval.");
+        navigate("/seller-profile");
+      }
+    };
+
+    checkVerification();
+  }, [userRole, user?.id, navigate]);
 
   const form = useForm<GigForm>({
     resolver: zodResolver(gigSchema),
@@ -99,7 +126,7 @@ export default function CreateGig() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["gigs"] });
       toast.success("Gig created and published!");
-      navigate("/seller-profile"); // or wherever you want
+      navigate("/my-gigs");
     },
     onError: (err: any) => {
       toast.error(err.message || "Failed to create gig");
@@ -200,7 +227,7 @@ export default function CreateGig() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-8">
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
