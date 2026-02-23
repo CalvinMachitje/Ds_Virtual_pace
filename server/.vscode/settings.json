@@ -1,0 +1,8 @@
+{
+  "python.analysis.extraPaths": [
+    "./app",
+    "./app/services",
+    "./app/routes"
+  ],
+  "python.defaultInterpreterPath": "./.venv/Scripts/python.exe"
+}

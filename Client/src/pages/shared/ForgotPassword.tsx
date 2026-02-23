@@ -7,7 +7,7 @@ import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { ArrowLeft, Mail } from "lucide-react";
 import { Link } from "react-router-dom";
-import { supabase } from "@/lib/supabase";
+import { toast } from "sonner";
 
 export default function ForgotPassword() {
   const [email, setEmail] = useState("");
@@ -22,22 +22,33 @@ export default function ForgotPassword() {
     setError(null);
     setLoading(true);
 
-    const { error } = await supabase.auth.resetPasswordForEmail(email, {
-      redirectTo: `${window.location.origin}/reset-password`,
-    });
+    try {
+      const res = await fetch("/api/auth/forgot-password", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ email: email.trim() }),
+      });
 
-    if (error) {
-      setError(error.message);
-    } else {
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to send reset link");
+      }
+
       setSuccess(true);
+      toast.success("Reset link sent! Check your email.");
+    } catch (err: any) {
+      setError(err.message || "Something went wrong");
+      toast.error(err.message || "Failed to send reset link");
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
         <Card className="w-full max-w-md border-slate-800 bg-slate-900/70 backdrop-blur-md shadow-2xl">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl text-white">Check Your Email</CardTitle>
@@ -57,7 +68,7 @@ export default function ForgotPassword() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
       <Card className="w-full max-w-md border-slate-800 bg-slate-900/70 backdrop-blur-md shadow-2xl">
         <CardHeader className="space-y-1 text-center relative">
           <Link to="/login" className="absolute left-4 top-4 text-slate-400 hover:text-white">

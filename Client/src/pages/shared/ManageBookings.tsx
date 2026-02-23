@@ -8,8 +8,8 @@ import { Button } from "@/components/ui/button";
 import { Calendar, Clock, Mail } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { supabase } from "@/lib/supabase";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 type Booking = {
   id: string;
@@ -21,48 +21,34 @@ type Booking = {
   avatar_url?: string;
 };
 
-const fetchBookings = async () => {
-  const { data: { user } } = await supabase.auth.getUser();
-  if (!user) throw new Error("Not authenticated");
-
-  // Active bookings (in_progress or pending)
-  const { data: active, error: activeError } = await supabase
-    .from("bookings") // ← Replace with your actual table name
-    .select("id, client_name, role, service, status, time, avatar_url")
-    .eq("provider_id", user.id) // assuming provider = seller/assistant
-    .in("status", ["in_progress", "pending"])
-    .order("time", { ascending: true });
-
-  // Completed bookings
-  const { data: completed, error: completedError } = await supabase
-    .from("bookings")
-    .select("id, client_name, role, service, status, time, avatar_url")
-    .eq("provider_id", user.id)
-    .eq("status", "completed")
-    .order("time", { ascending: false });
-
-  if (activeError || completedError) {
-    throw new Error("Failed to fetch bookings");
-  }
-
-  return {
-    active: active as Booking[] || [],
-    completed: completed as Booking[] || [],
-  };
-};
-
 export default function ManageBookings() {
-  const { data, isLoading, error, refetch } = useQuery({
+  const { data, isLoading, error, refetch } = useQuery<{
+    active: Booking[];
+    completed: Booking[];
+  }>({
     queryKey: ["manage-bookings"],
-    queryFn: fetchBookings,
-    staleTime: 5 * 60 * 1000, // 5 minutes
+    queryFn: async () => {
+      const res = await fetch("/api/bookings/manage", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load bookings");
+      }
+
+      return res.json();
+    },
+    staleTime: 5 * 60 * 1000,
   });
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
         <p className="text-xl mb-4">Failed to load bookings</p>
-        <p className="text-slate-400 mb-6">{error.message}</p>
+        <p className="text-slate-400 mb-6">{(error as Error).message}</p>
         <Button onClick={() => refetch()}>Try Again</Button>
       </div>
     );
@@ -72,7 +58,7 @@ export default function ManageBookings() {
   const completedBookings = data?.completed ?? [];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6 md:ml-64">
       <div className="max-w-4xl mx-auto">
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-6">Manage Bookings</h1>
 
@@ -137,10 +123,8 @@ export default function ManageBookings() {
                               variant="outline"
                               className={cn(
                                 "px-3 py-1 text-xs font-medium",
-                                booking.status === "In Progress" &&
-                                  "bg-blue-950/60 text-blue-300 border-blue-700",
-                                booking.status === "Pending" &&
-                                  "bg-amber-950/60 text-amber-300 border-amber-700"
+                                booking.status === "In Progress" && "bg-blue-950/60 text-blue-300 border-blue-700",
+                                booking.status === "Pending" && "bg-amber-950/60 text-amber-300 border-amber-700"
                               )}
                             >
                               {booking.status}

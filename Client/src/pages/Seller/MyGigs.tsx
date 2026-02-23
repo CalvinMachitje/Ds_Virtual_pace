@@ -1,7 +1,7 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 /* eslint-disable react-hooks/rules-of-hooks */
 // src/pages/seller/MyGigs.tsx
-import { useState, useEffect, useMemo } from "react";
+import { useState, useMemo } from "react";
 import { useNavigate } from "react-router-dom";
 import { useInfiniteQuery, useQueryClient } from "@tanstack/react-query";
 import {
@@ -19,11 +19,9 @@ import {
   AlertCircle,
   Loader2,
   Briefcase,
-  Link,
 } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import {
@@ -45,37 +43,26 @@ type Gig = {
   description: string;
   price: number;
   category: string;
-  seller_id: string;
   created_at: string;
   status: "draft" | "published" | "archived";
-  image_url?: string;
+  gallery_urls?: string[];
 };
 
 const PAGE_SIZE = 12;
 
-const fetchMyGigs = async (sellerId: string, { pageParam = 0 }) => {
-  const from = pageParam * PAGE_SIZE;
-  const to = from + PAGE_SIZE - 1;
+const fetchMyGigs = async ({ pageParam = 1 }: { pageParam?: number }) => {
+  const res = await fetch(`/api/seller/gigs?page=${pageParam}&per_page=${PAGE_SIZE}`, {
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+    },
+  });
 
-  const { data, error, count } = await supabase
-    .from("gigs")
-    .select(
-      `
-      id, title, description, price, category, seller_id, created_at, status, image_url
-    `,
-      { count: "exact" }
-    )
-    .eq("seller_id", sellerId)
-    .range(from, to)
-    .order("created_at", { ascending: false });
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to load gigs");
+  }
 
-  if (error) throw error;
-
-  return {
-    gigs: data || [],
-    nextPage: data?.length === PAGE_SIZE ? pageParam + 1 : null,
-    totalCount: count ?? 0,
-  };
+  return res.json();
 };
 
 export default function MyGigs() {
@@ -96,13 +83,13 @@ export default function MyGigs() {
     error,
   } = useInfiniteQuery({
     queryKey: ["my-gigs", user.id],
-    queryFn: ({ pageParam }) => fetchMyGigs(user.id, { pageParam }),
-    initialPageParam: 0,
-    getNextPageParam: (lastPage) => lastPage.nextPage,
+    queryFn: fetchMyGigs,
+    initialPageParam: 1,
+    getNextPageParam: (lastPage) => lastPage.has_more ? lastPage.page + 1 : undefined,
     staleTime: 5 * 60 * 1000,
   });
 
-  const allGigs = useMemo(() => data?.pages.flatMap((p) => p.gigs) ?? [], [data]);
+  const allGigs = useMemo(() => data?.pages.flatMap((p: any) => p.gigs) ?? [], [data]);
 
   // Bulk delete
   const [selectedGigIds, setSelectedGigIds] = useState<string[]>([]);
@@ -118,26 +105,31 @@ export default function MyGigs() {
     if (selectedGigIds.length === 0) return;
 
     try {
-      const { error } = await supabase
-        .from("gigs")
-        .delete()
-        .in("id", selectedGigIds)
-        .eq("seller_id", user.id);
+      await Promise.all(
+        selectedGigIds.map(async (gigId) => {
+          const res = await fetch(`/api/seller/gigs/${gigId}`, {
+            method: "DELETE",
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+            },
+          });
 
-      if (error) throw error;
+          if (!res.ok) {
+            const err = await res.json();
+            throw new Error(err.error || `Failed to delete gig ${gigId}`);
+          }
+        })
+      );
 
       toast.success(`${selectedGigIds.length} gig(s) deleted`);
       setSelectedGigIds([]);
       setShowDeleteConfirm(false);
       queryClient.invalidateQueries({ queryKey: ["my-gigs", user.id] });
     } catch (err: any) {
-      toast.error("Failed to delete gigs: " + err.message);
+      toast.error("Failed to delete some gigs: " + err.message);
     }
   };
 
-  // ────────────────────────────────────────────────────────────────────────
-  // Render
-  // ────────────────────────────────────────────────────────────────────────
   if (error) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
@@ -238,7 +230,7 @@ export default function MyGigs() {
 
                   <div className="relative">
                     <img
-                      src={gig.image_url || "/placeholder-gig.jpg"}
+                      src={gig.gallery_urls?.[0] || "/placeholder-gig.jpg"}
                       alt={gig.title}
                       className="w-full h-48 object-cover transition-transform duration-500 group-hover:scale-105"
                     />
@@ -281,11 +273,14 @@ export default function MyGigs() {
                   </CardContent>
 
                   <CardFooter className="p-6 pt-0 flex gap-3">
-                    <Link to={`/edit-gig/${gig.id}`}>
-                      <Button variant="outline" size="icon" className="border-slate-600 hover:bg-slate-800">
-                        <Edit className="h-4 w-4" />
-                      </Button>
-                    </Link>
+                    <Button
+                      variant="outline"
+                      size="icon"
+                      onClick={() => navigate(`/edit-gig/${gig.id}`)}
+                      className="border-slate-600 hover:bg-slate-800"
+                    >
+                      <Edit className="h-4 w-4" />
+                    </Button>
                   </CardFooter>
                 </Card>
               ))}

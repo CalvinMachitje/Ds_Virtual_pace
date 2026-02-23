@@ -9,7 +9,7 @@ import { Separator } from "@/components/ui/separator";
 import { Mail, Lock, Eye, EyeOff, ArrowLeft, Facebook, Chrome, Users } from "lucide-react";
 import { Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { supabase } from "@/lib/supabase";
+import { toast } from "sonner";
 
 export default function LoginPage() {
   const [email, setEmail] = useState("");
@@ -26,43 +26,69 @@ export default function LoginPage() {
     setError(null);
     setLoading(true);
 
-    if (!email.trim() || !password) {
+    if (!email.trim() || !password.trim()) {
       setError("Please fill in both email and password");
       setLoading(false);
       return;
     }
 
-    const { error: signInError } = await signIn(email, password);
+    try {
+      const { error: signInError } = await signIn(email.trim(), password.trim());
 
-    if (signInError) {
-      setError(signInError.message);
-    } else {
+      if (signInError) {
+        throw signInError;
+      }
+
+      toast.success("Logged in successfully");
       navigate("/dashboard");
+    } catch (err: any) {
+      const message = err.message || "Login failed. Please check your credentials.";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   const handleOAuthSignIn = async (provider: "google" | "facebook") => {
     setError(null);
     setLoading(true);
 
-    const { error } = await supabase.auth.signInWithOAuth({
-      provider,
-      options: {
-        redirectTo: `${window.location.origin}/dashboard`,
-      },
-    });
+    try {
+      const res = await fetch(`/api/auth/oauth/${provider}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          redirectTo: `${window.location.origin}/dashboard`,
+        }),
+      });
 
-    if (error) {
-      setError(error.message);
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to initiate ${provider} login`);
+      }
+
+      // Backend should return redirect URL for OAuth flow
+      if (data.redirectUrl) {
+        window.location.href = data.redirectUrl;
+        return;
+      }
+
+      toast.info("Redirecting to OAuth provider...");
+    } catch (err: any) {
+      const message = err.message || "OAuth login failed";
+      setError(message);
+      toast.error(message);
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
       <Card className="w-full max-w-md border-slate-800 bg-slate-900/70 backdrop-blur-md shadow-2xl">
         <CardHeader className="space-y-1 text-center relative">
           <Link to="/" className="absolute left-4 top-4 text-slate-400 hover:text-white">

@@ -1,10 +1,10 @@
-// src/pages/admin/LogsAdmin.tsx (Handle audit logs)
+// src/pages/admin/LogsAdmin.tsx
 import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { toast } from "sonner";
 import Skeleton from "react-loading-skeleton";
+import { useEffect } from "react";
 
 type Log = {
   id: string;
@@ -15,29 +15,66 @@ type Log = {
 };
 
 export default function LogsAdmin() {
-  const { data: logs, isLoading } = useQuery<Log[]>({
+  const { data: logs, isLoading, error } = useQuery<Log[], Error>({
     queryKey: ["admin-logs"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("audit_logs") // assume 'audit_logs' table
-        .select("*")
-        .order("created_at", { ascending: false });
+      const res = await fetch("/api/admin/logs", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) {
-        toast.error("Failed to load logs: " + error.message);
-        throw error;
+      if (!res.ok) {
+        const errData = await res.json().catch(() => ({}));
+        throw new Error(errData.error || "Failed to load logs");
       }
 
-      return data || [];
+      const json = await res.json();
+
+      // Runtime check to help TS
+      if (!Array.isArray(json)) {
+        throw new Error("Invalid logs response format");
+      }
+
+      return json as Log[];
     },
   });
 
+  // Show toast on error (instead of invalid onError option)
+  useEffect(() => {
+    if (error) {
+      toast.error(error.message || "Could not load logs");
+    }
+  }, [error]);
+
   if (isLoading) {
-    return <Skeleton height={500} />;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+        <div className="max-w-6xl mx-auto">
+          <Skeleton className="h-12 w-64 mb-8" />
+          <Skeleton height={500} />
+        </div>
+      </div>
+    );
+  }
+
+  if (error) {
+    return (
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+        <div className="text-center text-red-400">
+          <p className="text-xl mb-4">Failed to load logs</p>
+          <p>{error.message}</p>
+        </div>
+      </div>
+    );
+  }
+
+  if (!logs) {
+    return null;
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Audit Logs</h1>
 
@@ -56,7 +93,7 @@ export default function LogsAdmin() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {logs?.map((l) => (
+                {logs.map((l) => (
                   <TableRow key={l.id}>
                     <TableCell className="text-white">{l.user_id}</TableCell>
                     <TableCell className="text-slate-300">{l.action}</TableCell>

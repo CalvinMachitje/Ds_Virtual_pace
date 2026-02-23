@@ -2,23 +2,23 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
-import { supabase } from "@/lib/supabase";
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { LogOut, User, Mail, Clock, Shield, Key } from "lucide-react";
+import { LogOut, User, Mail, Clock, Shield, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 import { formatDistanceToNow } from "date-fns";
 import ChangePasswordForm from "@/components/settings/ChangePasswordForm";
 
 export default function Settings() {
-  const { user, session } = useAuth();
+  const { user } = useAuth(); // Assuming your AuthContext still provides user
   const navigate = useNavigate();
 
   const [lastSignIn, setLastSignIn] = useState<string | null>(null);
   const [authMethod, setAuthMethod] = useState<string>("Email + Password");
   const [loading, setLoading] = useState(true);
+  const [logoutLoading, setLogoutLoading] = useState(false);
 
   useEffect(() => {
     if (!user) {
@@ -28,21 +28,34 @@ export default function Settings() {
 
     const fetchSessionDetails = async () => {
       try {
-        const { data } = await supabase.auth.getSession();
-        if (data.session) {
-          // Use user timestamps instead of session.created_at which is not present on the Session type
-          const createdAt = new Date(
-            data.session.user?.last_sign_in_at ?? data.session.user?.created_at ?? Date.now()
-          );
-          setLastSignIn(formatDistanceToNow(createdAt, { addSuffix: true }));
+        const res = await fetch("/api/auth/session", {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+        });
 
-          if (data.session.user?.app_metadata?.provider) {
-            const provider = data.session.user.app_metadata.provider;
-            setAuthMethod(provider.charAt(0).toUpperCase() + provider.slice(1));
-          }
+        if (!res.ok) {
+          throw new Error("Failed to fetch session details");
+        }
+
+        const data = await res.json();
+
+        // Format last sign-in time
+        if (data.last_sign_in_at) {
+          const date = new Date(data.last_sign_in_at);
+          setLastSignIn(formatDistanceToNow(date, { addSuffix: true }));
+        }
+
+        // Determine auth method/provider
+        if (data.provider) {
+          const provider = data.provider;
+          setAuthMethod(
+            provider.charAt(0).toUpperCase() + provider.slice(1).replace(/_/g, " ")
+          );
         }
       } catch (err) {
         console.error("Failed to load session info:", err);
+        toast.error("Could not load account details");
       } finally {
         setLoading(false);
       }
@@ -52,19 +65,36 @@ export default function Settings() {
   }, [user, navigate]);
 
   const handleLogout = async () => {
+    setLogoutLoading(true);
     try {
-      await supabase.auth.signOut();
-      toast.success("Logged out", { duration: 2000 });
+      const res = await fetch("/api/auth/logout", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
+
+      // Clear token regardless of response
+      localStorage.removeItem("access_token");
+
+      if (!res.ok) {
+        throw new Error("Logout failed on server");
+      }
+
+      toast.success("Logged out successfully", { duration: 2000 });
       navigate("/login", { replace: true });
     } catch (err: any) {
-      toast.error("Logout failed");
+      toast.error("Logout failed – please try again");
+      console.error(err);
+    } finally {
+      setLogoutLoading(false);
     }
   };
 
   if (!user) return null;
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-3xl mx-auto space-y-8">
         <h1 className="text-3xl font-bold text-white mb-2">Settings</h1>
         <p className="text-slate-400">Manage your account and security preferences</p>
@@ -85,7 +115,7 @@ export default function Settings() {
               </Avatar>
               <div>
                 <h3 className="font-medium text-white">
-                  {user.user_metadata?.full_name || "User"}
+                  {user.user_metadata?.full_name || user.email?.split("@")[0] || "User"}
                 </h3>
                 <p className="text-slate-400 text-sm">{user.email}</p>
               </div>
@@ -97,7 +127,7 @@ export default function Settings() {
                   <Mail className="h-4 w-4" />
                   <span className="text-sm">Email</span>
                 </div>
-                <p className="text-white">{user.email}</p>
+                <p className="text-white">{user.email || "Not available"}</p>
               </div>
 
               <div>
@@ -106,7 +136,9 @@ export default function Settings() {
                   <span className="text-sm">Last sign-in</span>
                 </div>
                 <p className="text-white">
-                  {loading ? "Loading..." : lastSignIn || "Unknown"}
+                  {loading ? (
+                    <span className="italic">Loading...</span>
+                  ) : lastSignIn || "Unknown"}
                 </p>
               </div>
 
@@ -139,8 +171,16 @@ export default function Settings() {
               variant="destructive"
               className="w-full sm:w-auto"
               onClick={handleLogout}
+              disabled={logoutLoading}
             >
-              Log out from this device
+              {logoutLoading ? (
+                <>
+                  <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                  Logging out...
+                </>
+              ) : (
+                "Log out from this device"
+              )}
             </Button>
           </CardContent>
         </Card>

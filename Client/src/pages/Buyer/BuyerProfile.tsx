@@ -1,4 +1,3 @@
-/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/Buyer/BuyerProfile.tsx
 import { useState, useEffect, useRef } from "react";
 import { ArrowLeft, MoreVertical, MessageSquare, Bookmark, Star, CheckCircle, Edit, Upload, X, Plus, Save, Clock, DollarSign, List, CreditCard } from "lucide-react";
@@ -11,7 +10,6 @@ import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Skeleton } from "@/components/ui/skeleton";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -106,16 +104,20 @@ export default function BuyerProfile() {
         setError(null);
 
         // 1. Fetch profile
-        const { data: profileData, error: profileError } = await supabase
-          .from("profiles")
-          .select("id, full_name, role, bio, avatar_url, phone, created_at, updated_at, is_verified, interests")
-          .eq("id", id)
-          .maybeSingle();
+        const profileRes = await fetch(`/api/profile/${id}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+        });
 
-        if (profileError) throw profileError;
-        if (!profileData) throw new Error("Profile not found");
+        if (!profileRes.ok) {
+          const errData = await profileRes.json();
+          throw new Error(errData.error || "Profile not found");
+        }
 
+        const profileData = await profileRes.json();
         setProfile(profileData);
+
         if (isOwnProfile) {
           setEditForm({
             full_name: profileData.full_name || "",
@@ -125,22 +127,20 @@ export default function BuyerProfile() {
           });
         }
 
-        // 2. Fetch recent bookings (last 5 completed or active)
-        const { data: bookingsData, error: bookingsError } = await supabase
-          .from("bookings")
-          .select(`
-            id, status, price, created_at,
-            gig:gig_id (title),
-            seller:seller_id (full_name)
-          `)
-          .eq("buyer_id", id)
-          .in("status", ["completed", "accepted", "in_progress"])
-          .order("created_at", { ascending: false })
-          .limit(5);
+        // 2. Fetch recent bookings
+        const bookingsRes = await fetch(`/api/profile/${id}/bookings?limit=5`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+        });
 
-        if (bookingsError) throw bookingsError;
+        if (!bookingsRes.ok) {
+          const errData = await bookingsRes.json();
+          throw new Error(errData.error || "Failed to load bookings");
+        }
 
-        const formattedBookings = (bookingsData || []).map((b: any) => ({
+        const bookingsData = await bookingsRes.json();
+        const formattedBookings = bookingsData.map((b: any) => ({
           id: b.id,
           gig_title: b.gig?.title || "Untitled Gig",
           seller_name: b.seller?.full_name || "Unknown",
@@ -196,31 +196,30 @@ export default function BuyerProfile() {
     try {
       setUploadingAvatar(true);
 
-      const fileExt = file.name.split('.').pop();
-      const filePath = `${user.id}/${Date.now()}.${fileExt}`;
+      const formData = new FormData();
+      formData.append("avatar", file);
 
-      const { error: uploadError } = await supabase.storage
-        .from('avatars')
-        .upload(filePath, file, { upsert: true });
+      const res = await fetch("/api/profile/avatar", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: formData,
+      });
 
-      if (uploadError) throw uploadError;
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Upload failed");
+      }
 
-      const { data: { publicUrl } } = supabase.storage
-        .from('avatars')
-        .getPublicUrl(filePath);
+      const { publicUrl } = await res.json();
 
-      const { error: updateError } = await supabase
-        .from('profiles')
-        .update({ avatar_url: publicUrl })
-        .eq('id', user.id);
-
-      if (updateError) throw updateError;
-
+      // Update local state
       setProfile(prev => prev ? { ...prev, avatar_url: publicUrl } : null);
       toast.success("Avatar updated successfully!");
     } catch (err: any) {
       console.error("Avatar upload error:", err);
-      toast.error("Failed to upload avatar");
+      toast.error("Failed to upload avatar: " + err.message);
     } finally {
       setUploadingAvatar(false);
       if (fileInputRef.current) fileInputRef.current.value = "";
@@ -247,31 +246,37 @@ export default function BuyerProfile() {
     if (!user?.id || !profile) return;
 
     try {
-      const { error } = await supabase
-        .from('profiles')
-        .update({
+      const res = await fetch(`/api/profile/${user.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({
           full_name: editForm.full_name?.trim() || profile.full_name,
           bio: editForm.bio?.trim(),
           phone: editForm.phone?.trim(),
           interests: editForm.interests || [],
-        })
-        .eq('id', user.id);
+        }),
+      });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const errData = await res.json();
+        throw new Error(errData.error || "Update failed");
+      }
+
+      const updatedProfile = await res.json();
 
       setProfile(prev => ({
         ...prev!,
-        full_name: editForm.full_name?.trim() || prev!.full_name,
-        bio: editForm.bio?.trim(),
-        phone: editForm.phone?.trim(),
-        interests: editForm.interests || [],
+        ...updatedProfile,
       }));
 
       setIsEditing(false);
       toast.success("Profile updated successfully!");
     } catch (err: any) {
       console.error("Profile update error:", err);
-      toast.error("Failed to update profile");
+      toast.error("Failed to update profile: " + err.message);
     }
   };
 

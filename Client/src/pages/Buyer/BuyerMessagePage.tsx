@@ -20,7 +20,6 @@ import { Textarea } from "@/components/ui/textarea";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { MessageSquare, Plus, Bell, Loader2, AlertCircle } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
@@ -32,7 +31,7 @@ import {
 import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
 
 type Conversation = {
-  id: string; // booking id
+  id: string;
   seller_name: string;
   seller_avatar?: string;
   last_message: string;
@@ -53,49 +52,33 @@ type Message = {
   created_at: string;
   sender_id: string;
   receiver_id: string;
-  booking_id?: string;   // ← added this line (optional, fixes the error)
+  booking_id?: string;
 };
 
 const fetchBuyerConversations = async (buyerId: string): Promise<Conversation[]> => {
-  const { data, error } = await supabase
-    .from("bookings")
-    .select(`
-      id,
-      seller_id,
-      status,
-      start_time,
-      profiles!seller_id (full_name, avatar_url)
-    `)
-    .eq("buyer_id", buyerId)
-    .order("start_time", { ascending: false });
+  const res = await fetch(`/api/buyer/conversations?buyer_id=${buyerId}`, {
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+    },
+  });
 
-  if (error) throw error;
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to load conversations");
+  }
 
-  return (data || []).map((booking: any) => ({
-    id: booking.id,
-    seller_name: booking.profiles?.full_name || "Seller",
-    seller_avatar: booking.profiles?.avatar_url,
-    last_message: "New booking or message", // can replace with real last message query
-    last_message_time: new Date(booking.start_time).toLocaleDateString(),
-    unread_count: Math.floor(Math.random() * 5), // replace with real unread count
-    status: booking.status,
-  }));
+  return res.json();
 };
 
 const fetchSellers = async (search: string): Promise<Seller[]> => {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("id, full_name, avatar_url")
-    .eq("role", "seller")
-    .ilike("full_name", `%${search}%`)
-    .limit(10);
+  const res = await fetch(`/api/sellers/search?q=${encodeURIComponent(search)}`, {
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+    },
+  });
 
-  if (error) {
-    console.error("Seller search error:", error);
-    return [];
-  }
-
-  return data || [];
+  if (!res.ok) return [];
+  return res.json();
 };
 
 export default function BuyerMessagesPage() {
@@ -111,7 +94,7 @@ export default function BuyerMessagesPage() {
   const [sellerSearchResults, setSellerSearchResults] = useState<Seller[]>([]);
   const [selectedSeller, setSelectedSeller] = useState<Seller | null>(null);
   const [starterMessage, setStarterMessage] = useState("Hello! I'd like to discuss your gig.");
-  const [notifications, setNotifications] = useState<Message[]>([]); // For chat notifications
+  const [notifications, setNotifications] = useState<Message[]>([]);
 
   const { data: conversations = [], isLoading, error } = useQuery<Conversation[]>({
     queryKey: ["buyer-conversations", buyerId],
@@ -119,42 +102,15 @@ export default function BuyerMessagesPage() {
     enabled: !!buyerId,
   });
 
-  // Listen for new messages to update unread count and notifications
+  // Poll for new messages every 30 seconds (replace with WebSocket later)
   useEffect(() => {
     if (!buyerId) return;
 
-    const channel = supabase
-      .channel(`buyer-messages:${buyerId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `receiver_id=eq.${buyerId}`,
-        },
-        (payload) => {
-          // Correct typing: payload.new is the inserted message object
-          const newMessage = payload.new as Message;
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["buyer-conversations", buyerId] });
+    }, 30000);
 
-          queryClient.setQueryData<Conversation[]>(["buyer-conversations", buyerId], (old = []) =>
-            old.map((conv) =>
-              conv.id === newMessage.booking_id   // ← now safe (booking_id is optional)
-                ? { ...conv, unread_count: (conv.unread_count || 0) + 1 }
-                : conv
-            )
-          );
-
-          // Add to notifications
-          setNotifications((prev) => [newMessage, ...prev]);
-          toast.info("New message received!");
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => clearInterval(interval);
   }, [buyerId, queryClient]);
 
   // Seller search autocomplete
@@ -164,12 +120,12 @@ export default function BuyerMessagesPage() {
       return;
     }
 
-    const searchSellers = async () => {
+    const search = async () => {
       const results = await fetchSellers(sellerSearch);
       setSellerSearchResults(results);
     };
 
-    searchSellers();
+    search();
   }, [sellerSearch]);
 
   const filteredConversations = conversations.filter((conv) =>
@@ -190,14 +146,22 @@ export default function BuyerMessagesPage() {
     setNewChatLoading(true);
 
     try {
-      // Send starter message
-      const { error } = await supabase.from("messages").insert({
-        sender_id: user?.id,
-        receiver_id: selectedSeller.id,
-        content: starterMessage.trim(),
+      const res = await fetch("/api/messages/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({
+          receiver_id: selectedSeller.id,
+          content: starterMessage.trim(),
+        }),
       });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to start conversation");
+      }
 
       toast.success("Conversation started!");
       navigate(`/chat/${selectedSeller.id}`);
@@ -312,7 +276,7 @@ export default function BuyerMessagesPage() {
             {filteredConversations.map((conv) => (
               <Link
                 key={conv.id}
-                to={`/chat/${conv.id}`} // reuse chat page for buyer
+                to={`/chat/${conv.id}`}
                 className="block bg-slate-900/70 border border-slate-700 rounded-xl p-4 hover:border-blue-600 transition-colors group"
               >
                 <div className="flex items-start gap-4">

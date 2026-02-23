@@ -2,7 +2,8 @@
 import { useParams, useNavigate } from "react-router-dom";
 import { useState, useEffect, useRef } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+import io from "socket.io-client";
+import type { Socket } from "socket.io-client";
 import { useAuth } from "@/context/AuthContext";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Input } from "@/components/ui/input";
@@ -36,6 +37,7 @@ type Message = {
   file_name?: string | null;
   read_at?: string | null;
   created_at: string;
+  booking_id?: string | null; // optional
 };
 
 type UserProfile = {
@@ -45,7 +47,12 @@ type UserProfile = {
   role: "buyer" | "seller";
 };
 
-// ── Component ────────────────────────────────────────────────────────────
+// Socket.IO instance
+const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
+
+let socket: Socket | null = null;
+
+// ────────────────────────────────────────────────────────────────────────
 
 export default function Chat() {
   const { sellerId: otherUserId } = useParams<{ sellerId: string }>();
@@ -61,14 +68,15 @@ export default function Chat() {
   const [otherUser, setOtherUser] = useState<UserProfile | null>(null);
   const [hasConversationStarted, setHasConversationStarted] = useState<boolean | null>(null);
   const [loadingAccess, setLoadingAccess] = useState(true);
+  const [isTyping, setIsTyping] = useState(false);
 
   if (!otherUserId || !user?.id) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6 md:ml-64">
         <div className="text-center space-y-6 max-w-md">
           <AlertCircle className="h-16 w-16 mx-auto text-yellow-500" />
           <h2 className="text-2xl font-bold">Invalid or inaccessible chat</h2>
-          <p className="text-slate-400">
+          <p className="text-lg text-slate-300">
             This conversation either doesn't exist, or you don't have permission to view it.
           </p>
           <Button variant="outline" onClick={() => navigate(-1)}>
@@ -79,18 +87,90 @@ export default function Chat() {
     );
   }
 
-  // ── Load other user's profile + role ────────────────────────────────────
+  // ── Initialize Socket.IO ───────────────────────────────────────────────
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const token = localStorage.getItem("access_token");
+    if (!token) {
+      toast.error("Authentication required");
+      navigate("/login");
+      return;
+    }
+
+    socket = io(SOCKET_URL, {
+      query: { token },
+      reconnection: true,
+      transports: ["websocket"],
+    });
+
+    socket.on("connect", () => {
+      console.log("Socket connected");
+    });
+
+    socket.on("connected", (data) => {
+      console.log("Server says:", data.message);
+    });
+
+    socket.on("new_message", (msg: Message) => {
+      queryClient.setQueryData<Message[]>(
+        ["messages", user.id, otherUserId],
+        (old = []) => {
+          if (old.some((m) => m.id === msg.id)) return old;
+          return [...old, msg];
+        }
+      );
+      bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+
+      // Auto-mark as read if for current user
+      if (msg.receiver_id === user.id && !msg.read_at) {
+        socket?.emit("mark_read", {
+          message_id: msg.id,
+          booking_id: msg.booking_id,
+        });
+      }
+    });
+
+    socket.on("messages_read", (data: { message_id: string }) => {
+      queryClient.setQueryData<Message[]>(
+        ["messages", user.id, otherUserId],
+        (old = []) =>
+          old.map((m) =>
+            m.id === data.message_id ? { ...m, read_at: new Date().toISOString() } : m
+          )
+      );
+    });
+
+    socket.on("notification", (notif: { content: string }) => {
+      toast.info(notif.content);
+    });
+
+    socket.on("error", (err: { message: string }) => {
+      toast.error(err.message || "Socket error");
+    });
+
+    return () => {
+      socket?.disconnect();
+      socket = null;
+    };
+  }, [user?.id, otherUserId, navigate, queryClient]);
+
+  // ── Load other user's profile ──────────────────────────────────────────
   const { data: directUser, isLoading: userLoading } = useQuery<UserProfile | null>({
     queryKey: ["user-profile", otherUserId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("id, full_name, avatar_url, role")
-        .eq("id", otherUserId)
-        .maybeSingle();
+      const res = await fetch(`/api/profile/${otherUserId}`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) throw error;
-      return data;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "User not found");
+      }
+
+      return res.json();
     },
     enabled: !!otherUserId,
   });
@@ -99,152 +179,89 @@ export default function Chat() {
     if (directUser) setOtherUser(directUser);
   }, [directUser]);
 
-  // ── Check if conversation has already been started by buyer ─────────────
+  // ── Check if conversation exists & join room ───────────────────────────
   useEffect(() => {
-    const checkConversation = async () => {
-      if (!user?.id || !otherUserId) return;
+    const checkAndJoin = async () => {
+      if (!user?.id || !otherUserId || !socket?.connected) return;
 
       setLoadingAccess(true);
 
-      // Check if there are any existing messages in this thread
-      const { data: messages, error } = await supabase
-        .from("messages")
-        .select("id, sender_id")
-        .or(
-          `and(sender_id.eq.${user.id},receiver_id.eq.${otherUserId}),` +
-          `and(sender_id.eq.${otherUserId},receiver_id.eq.${user.id})`
-        )
-        .limit(1);
+      try {
+        const res = await fetch(`/api/messages/conversation/${otherUserId}/exists`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+        });
 
-      if (error) {
-        console.error("Error checking conversation:", error);
+        if (!res.ok) throw new Error("Failed to check conversation");
+
+        const { exists, booking_id } = await res.json();
+        setHasConversationStarted(exists);
+
+        if (exists) {
+          const convId = booking_id || otherUserId;
+          socket.emit("join_conversation", { conversation_id: convId });
+          socket.emit("mark_read", { booking_id: convId });
+        } else if (user.role === "seller") {
+          toast.error("Sellers can only reply to messages started by buyers.");
+        }
+      } catch (err: any) {
         toast.error("Failed to load conversation status");
         setHasConversationStarted(false);
-      } else {
-        const hasMessages = !!messages?.length;
-        setHasConversationStarted(hasMessages);
-
-        // If no messages yet, check who is trying to start it
-        if (!hasMessages) {
-          // Seller cannot initiate — only reply to existing buyer messages
-          if (user.role === "seller") {
-            toast.error("Sellers can only reply to messages started by buyers.");
-            setHasConversationStarted(false);
-          }
-        }
+      } finally {
+        setLoadingAccess(false);
       }
-
-      setLoadingAccess(false);
     };
 
-    checkConversation();
-  }, [user?.id, otherUserId, user?.role]);
+    checkAndJoin();
+  }, [user?.id, otherUserId, user?.role, socket?.connected]);
 
-  // ── Fetch messages ──────────────────────────────────────────────────────
+  // ── Fetch initial messages ─────────────────────────────────────────────
   const { data: messages = [], isLoading: messagesLoading } = useQuery<Message[]>({
     queryKey: ["messages", user.id, otherUserId],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("messages")
-        .select("*")
-        .or(
-          `and(sender_id.eq.${user.id},receiver_id.eq.${otherUserId}),and(sender_id.eq.${otherUserId},receiver_id.eq.${user.id})`
-        )
-        .order("created_at", { ascending: true });
+      const res = await fetch(`/api/messages/conversation/${otherUserId}`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) throw error;
-      return data ?? [];
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load messages");
+      }
+
+      return res.json();
     },
     enabled: !!user?.id && !!otherUserId && hasConversationStarted === true,
   });
 
-  // ── Auto-mark messages as read on load ──────────────────────────────────
   useEffect(() => {
-    if (!messages.length || !user?.id || hasConversationStarted !== true) return;
+    bottomRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [messages]);
 
-    const unreadIds = messages
-      .filter((m) => m.receiver_id === user.id && !m.read_at)
-      .map((m) => m.id);
-
-    if (!unreadIds.length) return;
-
-    // Optimistic UI update
-    queryClient.setQueryData<Message[]>(["messages", user.id, otherUserId], (old = []) =>
-      old.map((m) => (unreadIds.includes(m.id) ? { ...m, read_at: new Date().toISOString() } : m))
-    );
-
-    // Background update
-    supabase.from("messages").update({ read_at: new Date().toISOString() }).in("id", unreadIds);
-  }, [messages, user?.id, otherUserId, queryClient, hasConversationStarted]);
-
-  // ── Real-time subscription ──────────────────────────────────────────────
-  useEffect(() => {
-    if (!user?.id || !otherUserId || hasConversationStarted !== true) return;
-
-    const channelName = `dm-${[user.id, otherUserId].sort().join("-")}`;
-
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `or(and(sender_id.eq.${user.id},receiver_id.eq.${otherUserId}),and(sender_id.eq.${otherUserId},receiver_id.eq.${user.id}))`,
-        },
-        async (payload) => {
-          const newMsg = payload.new as Message;
-
-          queryClient.setQueryData<Message[]>(["messages", user.id, otherUserId], (old = []) => {
-            if (old.some((m) => m.id === newMsg.id)) return old;
-            return [...old, newMsg];
-          });
-
-          if (newMsg.receiver_id === user.id && !newMsg.read_at) {
-            await supabase
-              .from("messages")
-              .update({ read_at: new Date().toISOString() })
-              .eq("id", newMsg.id);
-
-            queryClient.setQueryData<Message[]>(["messages", user.id, otherUserId], (old = []) =>
-              old.map((m) => (m.id === newMsg.id ? { ...m, read_at: new Date().toISOString() } : m))
-            );
-          }
-
-          bottomRef.current?.scrollIntoView({ behavior: "smooth" });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [user?.id, otherUserId, queryClient, hasConversationStarted]);
-
-  // ── File upload helper ──────────────────────────────────────────────────
+  // ── File upload ────────────────────────────────────────────────────────
   const uploadFile = async (file: File) => {
     setUploadingFile(true);
     try {
-      const fileExt = file.name.split(".").pop() || "file";
-      const fileName = `${user.id}/${Date.now()}.${fileExt}`;
-      const filePath = `chat-files/${fileName}`;
+      const formData = new FormData();
+      formData.append("file", file);
 
-      const { error: uploadError } = await supabase.storage
-        .from("chat-files")
-        .upload(filePath, file, {
-          upsert: false,
-          contentType: file.type,
-        });
+      const res = await fetch("/api/messages/upload", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: formData,
+      });
 
-      if (uploadError) throw uploadError;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "File upload failed");
+      }
 
-      const { data } = supabase.storage.from("chat-files").getPublicUrl(filePath);
-      return {
-        url: data.publicUrl,
-        mime_type: file.type,
-        file_name: file.name,
-      };
+      const { url, mime_type, file_name } = await res.json();
+      return { url, mime_type, file_name };
     } catch (err: any) {
       toast.error("File upload failed: " + (err.message || "Unknown error"));
       throw err;
@@ -253,16 +270,20 @@ export default function Chat() {
     }
   };
 
-  // ── Send message mutation ───────────────────────────────────────────────
+  // ── Send message ───────────────────────────────────────────────────────
   const sendMessageMutation = useMutation({
     mutationFn: async () => {
       if (!messageText.trim() && !selectedFile) {
         throw new Error("Cannot send empty message");
       }
 
-      let payload: Partial<Message> = {
-        sender_id: user.id,
+      if (!socket?.connected) {
+        throw new Error("Socket not connected");
+      }
+
+      let payload: any = {
         receiver_id: otherUserId,
+        content: messageText.trim(),
       };
 
       if (selectedFile) {
@@ -276,52 +297,43 @@ export default function Chat() {
           file_name: fileData.file_name,
         };
         setSelectedFile(null);
-      } else {
-        payload = {
-          ...payload,
-          content: messageText.trim(),
-          is_file: false,
-        };
       }
 
-      const { error } = await supabase.from("messages").insert(payload);
-      if (error) throw error;
+      socket.emit("send_message", payload);
 
       const optimisticMsg: Message = {
         id: `temp-${Date.now()}`,
-        sender_id: user.id,
-        receiver_id: otherUserId,
-        content: payload.content ?? "",
-        is_file: payload.is_file ?? false,
-        file_url: payload.file_url ?? null,
-        mime_type: payload.mime_type ?? null,
-        file_name: payload.file_name ?? null,
+        sender_id: user!.id,
+        receiver_id: otherUserId!,
+        content: payload.content || "",
+        is_file: payload.is_file || false,
+        file_url: payload.file_url || null,
+        mime_type: payload.mime_type || null,
+        file_name: payload.file_name || null,
         read_at: null,
         created_at: new Date().toISOString(),
+        booking_id: undefined,
       };
 
-      queryClient.setQueryData<Message[]>(["messages", user.id, otherUserId], (old = []) => [
+      queryClient.setQueryData<Message[]>(["messages", user!.id, otherUserId], (old = []) => [
         ...old,
         optimisticMsg,
       ]);
-    },
-    onSuccess: () => {
+
       setMessageText("");
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
     },
     onError: (err: any) => {
-      toast.error("Failed to send message: " + (err.message || "Unknown error"));
+      toast.error("Failed to send message: " + (err.message || "Connection issue"));
     },
   });
 
-  const handleSend = () => {
-    sendMessageMutation.mutate();
-  };
+  const handleSend = () => sendMessageMutation.mutate();
 
   // ── Loading / Access states ─────────────────────────────────────────────
   if (userLoading || loadingAccess || messagesLoading || !otherUser) {
     return (
-      <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+      <div className="min-h-screen flex flex-col bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
         <div className="max-w-4xl mx-auto w-full space-y-6">
           <Skeleton height={80} />
           <div className="space-y-4">
@@ -340,10 +352,9 @@ export default function Chat() {
     );
   }
 
-  // Seller trying to initiate new chat → blocked
   if (hasConversationStarted === false && user.role === "seller") {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6 md:ml-64">
         <div className="text-center space-y-6 max-w-lg">
           <AlertCircle className="h-20 w-20 mx-auto text-yellow-500" />
           <h1 className="text-3xl font-bold">Cannot Start Conversation</h1>
@@ -367,7 +378,7 @@ export default function Chat() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col p-4 md:p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col p-4 md:p-6 md:ml-64">
       <div className="flex-1 max-w-4xl mx-auto w-full flex flex-col">
         {/* Chat Header */}
         <div className="flex items-center gap-4 pb-4 border-b border-slate-700 mb-6 sticky top-0 bg-gradient-to-b from-slate-950/90 to-transparent backdrop-blur-sm z-10 py-2">
@@ -381,6 +392,7 @@ export default function Chat() {
             <h2 className="font-semibold text-white">{otherUser.full_name || "User"}</h2>
             <p className="text-sm text-slate-400">
               {otherUser.role === "seller" ? "Seller" : "Buyer"} • Direct Message
+              {isTyping && <span className="ml-2 text-blue-400 animate-pulse">typing...</span>}
             </p>
           </div>
         </div>
@@ -511,7 +523,12 @@ export default function Chat() {
             <Input
               placeholder={selectedFile ? "Add optional message..." : "Type a message..."}
               value={messageText}
-              onChange={(e) => setMessageText(e.target.value)}
+              onChange={(e) => {
+                setMessageText(e.target.value);
+                if (socket?.connected && e.target.value.trim()) {
+                  socket.emit("typing", { receiver_id: otherUserId });
+                }
+              }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" && !e.shiftKey) {
                   e.preventDefault();

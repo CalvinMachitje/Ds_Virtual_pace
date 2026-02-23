@@ -1,4 +1,4 @@
-// File: Client/src/App.tsx
+// src/App.tsx
 import { Toaster } from "@/components/ui/toaster";
 import { Toaster as Sonner, toast } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
@@ -33,15 +33,15 @@ import SellerProfile from "./pages/Seller/SellerProfile";
 import CreateGig from "./pages/Seller/CreateGig";
 import BookingPage from "./pages/shared/BookingPage";
 import CategoryPage from "./pages/shared/CategoryPage";
-import BuyerMessagePage from "./pages/Buyer/BuyerMessagePage"; // note: was BuyerMessagesPage in some files
+import BuyerMessagesPage from "./pages/Buyer/BuyerMessagePage";
+import SellerMessagesPage from "./pages/Seller/SellerMessagesPage";
 import VerificationStatus from "./pages/shared/VerificationStatus";
 import ReviewBooking from "./pages/shared/ReviewBooking";
-import SellerMessagesPage from "./pages/Seller/SellerMessagesPage";
 import MyGigs from "./pages/Seller/MyGigs";
 import EditGig from "./pages/Seller/EditGig";
 import MyBookings from "./pages/Buyer/MyBookings";
 import SellerBookings from "./pages/Seller/SellerBookings";
-import ChatPage from "./pages/shared/Chat";
+import Chat from "./pages/shared/Chat";
 
 // Admin Pages
 import AdminDashboard from "./pages/admin/AdminDashboard";
@@ -59,28 +59,26 @@ import AdminProfile from "./pages/admin/AdminProfile";
 // Isolated Admin Login
 import AdminLogin from "./pages/admin/AdminLogin";
 
-// Supabase Auth & Layout
+// Auth & Layout
 import { useAuth } from "@/context/AuthContext";
 import BottomNav from "@/components/layout/NavLayout";
 
 const queryClient = new QueryClient();
 
 // ────────────────────────────────────────────────
-// Role-specific layouts
+// Layouts with sidebar offset
 // ────────────────────────────────────────────────
-const BuyerLayout = () => (
-  <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col">
+const SharedProtectedLayout = () => (
+  <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col md:ml-64">
     <main className="flex-1 pb-20 md:pb-0 overflow-y-auto">
       <Outlet />
     </main>
     <BottomNav children={""} />
   </div>
 );
-
-const SellerLayout = BuyerLayout; // Reuse for now
 
 const AdminLayout = () => (
-  <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col">
+  <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 flex flex-col md:ml-64">
     <main className="flex-1 pb-20 md:pb-0 overflow-y-auto">
       <Outlet />
     </main>
@@ -89,7 +87,7 @@ const AdminLayout = () => (
 );
 
 // ────────────────────────────────────────────────
-// Strict role guard
+// Role guard component
 // ────────────────────────────────────────────────
 type AllowedRoles = 'buyer' | 'seller' | 'admin';
 
@@ -128,31 +126,22 @@ const RequireRole = ({ children, allowedRoles }: { children: React.ReactNode; al
   }, [session, loading, userRole, isAdmin, navigate, allowedRoles, location]);
 
   if (loading) {
-    return <div className="flex items-center justify-center min-h-screen text-white">Verifying access...</div>;
+    return (
+      <div className="flex items-center justify-center min-h-screen text-white bg-slate-950 md:ml-64">
+        Verifying access...
+      </div>
+    );
   }
 
   return <>{children}</>;
 };
 
 // ────────────────────────────────────────────────
-// Protected Layout (role-specific nav)
-// ────────────────────────────────────────────────
-const ProtectedLayout = () => {
-  const { userRole } = useAuth();
-
-  if (userRole === "admin") return <AdminLayout />;
-  if (userRole === "buyer") return <BuyerLayout />;
-  if (userRole === "seller") return <SellerLayout />;
-
-  return <BuyerLayout />; // Fallback
-};
-
-// ────────────────────────────────────────────────
-// Dashboard Switcher
+// Dashboard switcher based on role
 // ────────────────────────────────────────────────
 const DashboardSwitcher = () => {
-  const { userRole } = useAuth();
-  if (userRole === "admin") return <Navigate to="/admin" replace />;
+  const { userRole, isAdmin } = useAuth();
+  if (isAdmin) return <Navigate to="/admin" replace />;
   return userRole === "seller" ? <SellerDashboard /> : <BuyerDashboard />;
 };
 
@@ -162,7 +151,7 @@ const App = () => {
   if (loading) {
     return (
       <div className="flex items-center justify-center min-h-screen text-white bg-slate-950">
-        Loading...
+        Loading application...
       </div>
     );
   }
@@ -182,34 +171,39 @@ const App = () => {
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
 
-            {/* Public marketplace routes (accessible without login) */}
+            {/* Public marketplace routes */}
             <Route path="/gigs" element={<Gigs />} />
             <Route path="/gig/:id" element={<GigDetail />} />
-            <Route path="/category/:category" element={<CategoryPage />} />
+            <Route path="/category/:slug" element={<CategoryPage />} />
 
-            {/* Protected routes – strict role checks */}
-            <Route element={<RequireRole allowedRoles={["buyer", "seller", "admin"]}><ProtectedLayout /></RequireRole>}>
+            {/* Protected routes with role checks */}
+            <Route element={<RequireRole allowedRoles={["buyer", "seller", "admin"]}><SharedProtectedLayout /></RequireRole>}>
               <Route path="/dashboard" element={<DashboardSwitcher />} />
+              <Route path="/settings" element={<Settings />} />
+              <Route path="/booking/:id" element={<BookingPage />} />
+              <Route path="/chat/:id" element={<Chat />} />
+              <Route path="/verification/:id" element={<VerificationStatus />} />
+              <Route path="/review-booking/:id" element={<ReviewBooking />} />
 
-              {/* Buyer-only routes */}
+              {/* Buyer-only */}
               <Route element={<RequireRole allowedRoles={["buyer"]}><Outlet /></RequireRole>}>
                 <Route path="/my-bookings" element={<MyBookings />} />
-                <Route path="/messages/buyer" element={<BuyerMessagePage />} />
+                <Route path="/messages" element={<BuyerMessagesPage />} />
                 <Route path="/profile/:id" element={<BuyerProfile />} />
               </Route>
 
-              {/* Seller-only routes */}
+              {/* Seller-only */}
               <Route element={<RequireRole allowedRoles={["seller"]}><Outlet /></RequireRole>}>
                 <Route path="/create-gig" element={<CreateGig />} />
                 <Route path="/my-gigs" element={<MyGigs />} />
                 <Route path="/edit-gig/:id" element={<EditGig />} />
                 <Route path="/seller-bookings" element={<SellerBookings />} />
-                <Route path="/messages/seller" element={<SellerMessagesPage />} />
+                <Route path="/messages" element={<SellerMessagesPage />} />
                 <Route path="/seller-profile/:id" element={<SellerProfile />} />
               </Route>
 
-              {/* Admin-only routes */}
-              <Route element={<RequireRole allowedRoles={["admin"]}><Outlet /></RequireRole>}>
+              {/* Admin-only – using separate layout if needed */}
+              <Route element={<RequireRole allowedRoles={["admin"]}><AdminLayout /></RequireRole>}>
                 <Route path="/admin" element={<AdminDashboard />} />
                 <Route path="/admin/users" element={<UsersAdmin />} />
                 <Route path="/admin/gigs" element={<GigsAdmin />} />
@@ -222,16 +216,9 @@ const App = () => {
                 <Route path="/admin/logs" element={<LogsAdmin />} />
                 <Route path="/admin/profile" element={<AdminProfile />} />
               </Route>
-
-              {/* Shared protected routes (buyer + seller + admin) */}
-              <Route path="/booking/:id" element={<BookingPage />} />
-              <Route path="/verification/:id" element={<VerificationStatus />} />
-              <Route path="/review-booking/:id" element={<ReviewBooking />} />
-              <Route path="/chat/:id" element={<ChatPage />} />           {/* generalized chat route */}
-              <Route path="/settings" element={<Settings />} />
             </Route>
 
-            {/* 404 - must be last */}
+            {/* 404 */}
             <Route path="*" element={<NotFound />} />
           </Routes>
         </BrowserRouter>

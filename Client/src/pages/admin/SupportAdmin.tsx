@@ -1,6 +1,5 @@
-// src/pages/admin/SupportAdmin.tsx (new file for support tickets)
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+// src/pages/admin/SupportAdmin.tsx
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -17,42 +16,63 @@ type Ticket = {
 };
 
 export default function SupportAdmin() {
-  const { data: tickets, isLoading, refetch } = useQuery<Ticket[]>({
+  const queryClient = useQueryClient();
+
+  const { data: tickets, isLoading } = useQuery<Ticket[]>({
     queryKey: ["admin-support"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("support_tickets") // assume 'support_tickets' table
-        .select("*");
+      const res = await fetch("/api/admin/support", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) {
-        toast.error("Failed to load tickets: " + error.message);
-        throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error("Failed to load tickets: " + (err.error || "Unknown error"));
+        throw new Error(err.error || "Failed");
       }
 
-      return data || [];
+      return res.json();
     },
   });
 
-  const handleCloseTicket = async (ticketId: string) => {
-    const { error } = await supabase
-      .from("support_tickets")
-      .update({ status: "closed" })
-      .eq("id", ticketId);
+  const closeTicket = useMutation({
+    mutationFn: async (ticketId: string) => {
+      const res = await fetch(`/api/admin/support/${ticketId}/close`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-    if (error) {
-      toast.error("Failed to close ticket: " + error.message);
-    } else {
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to close ticket");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
       toast.success("Ticket closed");
-      refetch();
-    }
-  };
+      queryClient.invalidateQueries({ queryKey: ["admin-support"] });
+    },
+    onError: (err: any) => toast.error(err.message || "Close failed"),
+  });
 
   if (isLoading) {
-    return <Skeleton height={500} />;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+        <div className="max-w-6xl mx-auto">
+          <Skeleton className="h-12 w-64 mb-8" />
+          <Skeleton height={500} />
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Support Tickets</h1>
 
@@ -86,8 +106,8 @@ export default function SupportAdmin() {
                       <Button
                         variant="outline"
                         size="sm"
-                        onClick={() => handleCloseTicket(t.id)}
-                        disabled={t.status === "closed"}
+                        onClick={() => closeTicket.mutate(t.id)}
+                        disabled={t.status === "closed" || closeTicket.isPending}
                       >
                         Close Ticket
                       </Button>

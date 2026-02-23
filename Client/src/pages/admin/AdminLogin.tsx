@@ -28,43 +28,42 @@ export default function AdminLogin() {
     e.preventDefault();
 
     if (!email.trim() || !password.trim()) {
-        toast.error("Please enter both email and password");
-        return;
+      toast.error("Please enter both email and password");
+      return;
     }
 
     setLoading(true);
 
     try {
-        console.log('[AdminLogin] Attempting login with email:', email);
+      console.log('[AdminLogin] Attempting login with email:', email);
 
-        const { error } = await adminLogin(email, password);
+      const { error } = await adminLogin(email, password);
 
-        if (error) throw error;
+      if (error) throw error;
 
-        // Wait for context to update (auth listener is fast)
-        await new Promise(resolve => setTimeout(resolve, 500));
+      // Wait for context to update (auth listener is fast)
+      await new Promise(resolve => setTimeout(resolve, 500));
 
-        // Use the latest isAdmin state
-        if (isAdmin) {
+      // Use the latest isAdmin state
+      if (isAdmin) {
         console.log('[AdminLogin] Confirmed admin - navigating');
         navigate('/admin', { replace: true });
-        } else {
+      } else {
         // Rare fallback
         toast.warning("Admin status delayed - redirecting manually");
         navigate('/admin', { replace: true });
-        }
-
+      }
     } catch (err: unknown) {
-        const error = err instanceof Error ? err : new Error(String(err));
-        toast.error(error.message || 'Admin login failed');
-        console.error('[AdminLogin] Full error:', error);
+      const error = err instanceof Error ? err : new Error(String(err));
+      toast.error(error.message || 'Admin login failed');
+      console.error('[AdminLogin] Full error:', error);
     } finally {
-        setLoading(false);
+      setLoading(false);
     }
-    };
+  };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
       <Card className="w-full max-w-md bg-slate-900/80 border-slate-700">
         <CardHeader className="space-y-1">
           <div className="flex items-center justify-center mb-4">

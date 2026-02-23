@@ -1,6 +1,5 @@
-// src/pages/admin/PaymentsAdmin.tsx (Managing payments)
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+// src/pages/admin/PaymentsAdmin.tsx
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -17,42 +16,64 @@ type Payment = {
 };
 
 export default function PaymentsAdmin() {
-  const { data: payments, isLoading, refetch } = useQuery<Payment[]>({
+  const queryClient = useQueryClient();
+
+  const { data: payments, isLoading } = useQuery<Payment[]>({
     queryKey: ["admin-payments"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("payments") // assume 'payments' table
-        .select("*");
+      const res = await fetch("/api/admin/payments", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) {
-        toast.error("Failed to load payments: " + error.message);
-        throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error("Failed to load payments: " + (err.error || "Unknown error"));
+        throw new Error(err.error || "Failed");
       }
 
-      return data || [];
+      return res.json();
     },
   });
 
-  const handleRefund = async (paymentId: string) => {
-    const { error } = await supabase
-      .from("payments")
-      .update({ status: "refunded" })
-      .eq("id", paymentId);
+  const refundPayment = useMutation({
+    mutationFn: async (paymentId: string) => {
+      const res = await fetch(`/api/admin/payments/${paymentId}/refund`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ status: "refunded" }),
+      });
 
-    if (error) {
-      toast.error("Failed to refund: " + error.message);
-    } else {
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Refund failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
       toast.success("Payment refunded");
-      refetch();
-    }
-  };
+      queryClient.invalidateQueries({ queryKey: ["admin-payments"] });
+    },
+    onError: (err: any) => toast.error(err.message || "Refund failed"),
+  });
 
   if (isLoading) {
-    return <Skeleton height={500} />;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+        <div className="max-w-6xl mx-auto">
+          <Skeleton className="h-12 w-64 mb-8" />
+          <Skeleton height={500} />
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Manage Payments</h1>
 
@@ -86,8 +107,8 @@ export default function PaymentsAdmin() {
                       <Button
                         variant="destructive"
                         size="sm"
-                        onClick={() => handleRefund(p.id)}
-                        disabled={p.status === "refunded"}
+                        onClick={() => refundPayment.mutate(p.id)}
+                        disabled={p.status === "refunded" || refundPayment.isPending}
                       >
                         Refund
                       </Button>

@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// src/pages/Seller/SellerMessagesPage.tsx
+// src/pages/seller/SellerMessagesPage.tsx
 import { useState, useEffect } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -7,9 +7,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { Search, MessageSquare, AlertCircle, Loader2 } from "lucide-react";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { Link } from "react-router-dom";
 import Skeleton from "react-loading-skeleton";
@@ -25,54 +23,6 @@ type Conversation = {
   status: "pending" | "accepted" | "rejected" | "completed" | "cancelled";
 };
 
-const fetchSellerConversations = async (sellerId: string): Promise<Conversation[]> => {
-  const { data: bookings, error: bookingsError } = await supabase
-    .from("bookings")
-    .select(`
-      id,
-      buyer_id,
-      status,
-      start_time,
-      profiles!buyer_id (full_name, avatar_url)
-    `)
-    .eq("seller_id", sellerId)
-    .order("start_time", { ascending: false });
-
-  if (bookingsError) throw bookingsError;
-
-  const conversations = await Promise.all(
-    (bookings || []).map(async (booking: any) => {
-      const { data: lastMsg } = await supabase
-        .from("messages")
-        .select("content, created_at")
-        .eq("booking_id", booking.id)
-        .order("created_at", { ascending: false })
-        .limit(1);
-
-      const { count: unread } = await supabase
-        .from("messages")
-        .select("id", { count: "exact", head: true })
-        .eq("booking_id", booking.id)
-        .eq("receiver_id", sellerId)
-        .is("read_at", null);
-
-      return {
-        id: booking.id,
-        client_name: booking.profiles?.full_name || "Client",
-        client_avatar: booking.profiles?.avatar_url,
-        last_message: lastMsg?.[0]?.content || "New booking request",
-        last_message_time: lastMsg?.[0]?.created_at
-          ? new Date(lastMsg[0].created_at).toLocaleString()
-          : new Date(booking.start_time).toLocaleDateString(),
-        unread_count: unread || 0,
-        status: booking.status,
-      };
-    })
-  );
-
-  return conversations;
-};
-
 export default function SellerMessagesPage() {
   const { user } = useAuth();
   const sellerId = user?.id;
@@ -81,43 +31,34 @@ export default function SellerMessagesPage() {
 
   const { data: conversations = [], isLoading, error, refetch } = useQuery<Conversation[]>({
     queryKey: ["seller-conversations", sellerId],
-    queryFn: () => fetchSellerConversations(sellerId || ""),
+    queryFn: async () => {
+      if (!sellerId) throw new Error("Not logged in");
+
+      const res = await fetch("/api/seller/conversations", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load conversations");
+      }
+
+      return res.json();
+    },
     enabled: !!sellerId,
   });
 
-  // Realtime: new message → refresh conversations
+  // Poll for new messages/notifications every 20 seconds
   useEffect(() => {
     if (!sellerId) return;
 
-    const channel = supabase
-      .channel(`seller-messages:${sellerId}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "INSERT",
-          schema: "public",
-          table: "messages",
-          filter: `receiver_id=eq.${sellerId}`,
-        },
-        (payload) => {
-          queryClient.setQueryData<Conversation[]>(
-            ["seller-conversations", sellerId],
-            (old = []) => {
-              return old.map(conv =>
-                conv.id === payload.new.booking_id
-                  ? { ...conv, unread_count: (conv.unread_count || 0) + 1 }
-                  : conv
-              );
-            }
-          );
-          toast.info("New message received from a client");
-        }
-      )
-      .subscribe();
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["seller-conversations", sellerId] });
+    }, 20000);
 
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => clearInterval(interval);
   }, [sellerId, queryClient]);
 
   const filteredConversations = conversations.filter((conv) =>

@@ -18,9 +18,9 @@ import {
 } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { cn } from "@/lib/utils";
+import { toast } from "sonner";
 
 type Booking = {
   id: string;
@@ -41,59 +41,6 @@ type EnrichedBooking = Booking & {
   isBuyer: boolean;
 };
 
-const fetchBooking = async (bookingId: string, currentUserId: string): Promise<EnrichedBooking> => {
-  // 1. Core booking
-  const { data: booking, error: bookingError } = await supabase
-    .from("bookings")
-    .select(
-      `
-      id,
-      buyer_id,
-      seller_id,
-      service,
-      start_time,
-      duration_hours,
-      price_per_hour,
-      total_price,
-      status,
-      payment_method
-    `
-    )
-    .eq("id", bookingId)
-    .maybeSingle();
-
-  if (bookingError || !booking) {
-    throw bookingError || new Error("Booking not found");
-  }
-
-  // 2. Buyer profile
-  const { data: buyerProfile } = await supabase
-    .from("profiles")
-    .select("full_name, avatar_url")
-    .eq("id", booking.buyer_id)
-    .maybeSingle();
-
-  // 3. Seller profile
-  const { data: sellerProfile } = await supabase
-    .from("profiles")
-    .select("full_name, avatar_url")
-    .eq("id", booking.seller_id)
-    .maybeSingle();
-
-  // 4. Determine other party
-  const isBuyer = booking.buyer_id === currentUserId;
-  const otherParty = isBuyer
-    ? { name: sellerProfile?.full_name || "Service Provider", avatar: sellerProfile?.avatar_url }
-    : { name: buyerProfile?.full_name || "Client", avatar: buyerProfile?.avatar_url };
-
-  return {
-    ...booking,
-    avatar_url: otherParty.avatar,
-    other_party_name: otherParty.name,
-    isBuyer,
-  };
-};
-
 export default function BookingPage() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
@@ -101,7 +48,35 @@ export default function BookingPage() {
 
   const { data: booking, isLoading, error } = useQuery<EnrichedBooking>({
     queryKey: ["booking", id, user?.id],
-    queryFn: () => fetchBooking(id!, user!.id),
+    queryFn: async () => {
+      if (!id || !user?.id) throw new Error("Invalid booking or user");
+
+      const res = await fetch(`/api/bookings/${id}`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Booking not found");
+      }
+
+      const bookingData = await res.json();
+
+      // Determine other party
+      const isBuyer = bookingData.buyer_id === user.id;
+      const otherParty = isBuyer
+        ? bookingData.seller
+        : bookingData.buyer;
+
+      return {
+        ...bookingData,
+        avatar_url: otherParty?.avatar_url,
+        other_party_name: otherParty?.full_name || (isBuyer ? "Service Provider" : "Client"),
+        isBuyer,
+      };
+    },
     enabled: !!id && !!user?.id,
   });
 
@@ -140,7 +115,7 @@ export default function BookingPage() {
   }[booking.status] || "bg-slate-600";
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6 md:ml-64">
       <div className="max-w-3xl mx-auto">
         {/* Header */}
         <div className="flex items-center justify-between mb-6">
@@ -187,7 +162,9 @@ export default function BookingPage() {
                   </div>
                   <div>
                     <p className="text-slate-400 text-sm">Date & Time</p>
-                    <p className="text-white font-medium">{booking.start_time}</p>
+                    <p className="text-white font-medium">
+                      {new Date(booking.start_time).toLocaleString()}
+                    </p>
                   </div>
                 </div>
 
@@ -239,12 +216,14 @@ export default function BookingPage() {
                 variant="outline"
                 className="border-slate-600 hover:bg-slate-800 h-14 text-lg"
                 disabled={booking.status !== "pending"}
+                onClick={() => toast.info("Cancellation feature coming soon")}
               >
                 Cancel Booking
               </Button>
               <Button
                 className="bg-blue-600 hover:bg-blue-700 h-14 text-lg"
                 disabled={booking.status === "completed" || booking.status === "cancelled"}
+                onClick={() => navigate(`/chat/${booking.seller_id}`)}
               >
                 Message Provider
               </Button>
@@ -255,12 +234,14 @@ export default function BookingPage() {
                 variant="outline"
                 className="border-slate-600 hover:bg-slate-800 h-14 text-lg"
                 disabled={booking.status !== "pending"}
+                onClick={() => toast.info("Decline feature coming soon")}
               >
                 Decline
               </Button>
               <Button
                 className="bg-green-600 hover:bg-green-700 h-14 text-lg"
                 disabled={booking.status !== "pending"}
+                onClick={() => toast.info("Accept feature coming soon")}
               >
                 Accept Booking
               </Button>

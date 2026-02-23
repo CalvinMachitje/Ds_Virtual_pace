@@ -1,6 +1,5 @@
-// src/pages/admin/GigsAdmin.tsx (Managing gigs)
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+// src/pages/admin/GigsAdmin.tsx
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -19,56 +18,67 @@ type Gig = {
 };
 
 export default function GigsAdmin() {
-  const { data: gigs, isLoading, refetch } = useQuery<Gig[]>({
+  const queryClient = useQueryClient();
+
+  const { data: gigs, isLoading } = useQuery<Gig[]>({
     queryKey: ["admin-gigs"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("gigs")
-        .select("id, title, description, price, category, seller_id, created_at, status");
+      const res = await fetch("/api/admin/gigs", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) {
-        toast.error("Failed to load gigs: " + error.message);
-        throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error("Failed to load gigs: " + (err.error || "Unknown error"));
+        throw new Error(err.error || "Failed");
       }
 
-      return data || [];
+      return res.json();
     },
   });
 
-  const handleApproveGig = async (gigId: string) => {
-    const { error } = await supabase
-      .from("gigs")
-      .update({ status: "active" })
-      .eq("id", gigId);
+  const updateGigStatus = useMutation({
+    mutationFn: async ({ gigId, newStatus }: { gigId: string; newStatus: "active" | "rejected" }) => {
+      const res = await fetch(`/api/admin/gigs/${gigId}/status`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
 
-    if (error) {
-      toast.error("Failed to approve gig: " + error.message);
-    } else {
-      toast.success("Gig approved");
-      refetch();
-    }
-  };
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to update gig status");
+      }
 
-  const handleRejectGig = async (gigId: string) => {
-    const { error } = await supabase
-      .from("gigs")
-      .update({ status: "rejected" })
-      .eq("id", gigId);
-
-    if (error) {
-      toast.error("Failed to reject gig: " + error.message);
-    } else {
-      toast.success("Gig rejected");
-      refetch();
-    }
-  };
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success("Gig status updated");
+      queryClient.invalidateQueries({ queryKey: ["admin-gigs"] });
+    },
+    onError: (err: any) => {
+      toast.error(err.message || "Failed to update gig status");
+    },
+  });
 
   if (isLoading) {
-    return <Skeleton height={500} />;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+        <div className="max-w-6xl mx-auto">
+          <Skeleton className="h-12 w-64 mb-8" />
+          <Skeleton height={500} />
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Manage Gigs</h1>
 
@@ -105,16 +115,16 @@ export default function GigsAdmin() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleApproveGig(g.id)}
-                          disabled={g.status === "active"}
+                          onClick={() => updateGigStatus.mutate({ gigId: g.id, newStatus: "active" })}
+                          disabled={g.status === "active" || updateGigStatus.isPending}
                         >
                           Approve
                         </Button>
                         <Button
                           variant="destructive"
                           size="sm"
-                          onClick={() => handleRejectGig(g.id)}
-                          disabled={g.status === "rejected"}
+                          onClick={() => updateGigStatus.mutate({ gigId: g.id, newStatus: "rejected" })}
+                          disabled={g.status === "rejected" || updateGigStatus.isPending}
                         >
                           Reject
                         </Button>

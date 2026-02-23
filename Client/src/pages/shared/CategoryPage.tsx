@@ -1,7 +1,6 @@
 // src/pages/shared/CategoryPage.tsx
 import { useQuery } from "@tanstack/react-query";
-import { useParams, Link, useNavigate } from "react-router-dom"; // ← added useNavigate
-import { supabase } from "@/lib/supabase";
+import { useParams, Link, useNavigate } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { useState } from "react";
 import {
@@ -18,7 +17,7 @@ import { Input } from "@/components/ui/input";
 import Skeleton from "react-loading-skeleton";
 import { motion } from "framer-motion";
 import "react-loading-skeleton/dist/skeleton.css";
-import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar"; // fixed import
+import { Avatar, AvatarImage, AvatarFallback } from "@/components/ui/avatar";
 import { toast } from "sonner";
 
 const PAGE_SIZE = 5;
@@ -44,7 +43,7 @@ type SellerGroup = {
 export default function CategoryPage() {
   const { slug } = useParams();
   const { user } = useAuth();
-  const navigate = useNavigate(); // ← added for navigation
+  const navigate = useNavigate();
   const decodedCategory = decodeURIComponent(slug || "");
 
   const [minRating, setMinRating] = useState(0);
@@ -56,96 +55,25 @@ export default function CategoryPage() {
   const { data, isLoading, error } = useQuery<SellerGroup[]>({
     queryKey: ["category", decodedCategory, page, minRating, maxPrice, search, sort],
     queryFn: async () => {
-      const { data: gigsData, error: gigsError } = await supabase
-        .from("gigs")
-        .select(
-          "id,title,description,price,seller_id,profiles(id,full_name,avatar_url,rating,is_verified,is_online)"
-        )
-        .ilike("category", `%${decodedCategory}%`);
+      let url = `/api/categories/${encodeURIComponent(decodedCategory)}?page=${page}&limit=${PAGE_SIZE}`;
 
-      if (gigsError) {
-        console.error("Gigs fetch error:", gigsError);
-        throw gigsError;
-      }
+      if (minRating > 0) url += `&min_rating=${minRating}`;
+      if (maxPrice) url += `&max_price=${maxPrice}`;
+      if (search.trim()) url += `&search=${encodeURIComponent(search.trim())}`;
+      if (sort !== "ai") url += `&sort=${sort}`;
 
-      if (!gigsData?.length) return [];
-
-      const grouped = gigsData.reduce((acc: Record<string, SellerGroup>, gig: any) => {
-        const sellerId = gig.seller_id;
-        if (!acc[sellerId]) {
-          acc[sellerId] = {
-            seller: {
-              id: sellerId,
-              full_name: gig.profiles?.full_name || "Unknown",
-              avatar_url: gig.profiles?.avatar_url,
-              rating: gig.profiles?.rating,
-              is_verified: gig.profiles?.is_verified,
-              is_online: gig.profiles?.is_online,
-            },
-            gigs: [],
-            reviewCount: 0,
-          };
-        }
-        acc[sellerId].gigs.push({
-          id: gig.id,
-          title: gig.title,
-          description: gig.description,
-          price: gig.price,
-        });
-        return acc;
-      }, {});
-
-      const sellerIds = Object.keys(grouped);
-
-      const { data: reviewsData, error: reviewsError } = await supabase
-        .from("reviews")
-        .select("reviewed_id")
-        .in("reviewed_id", sellerIds);
-
-      if (reviewsError) {
-        console.warn("Reviews count fetch warning:", reviewsError);
-      } else {
-        reviewsData?.forEach((r) => {
-          if (grouped[r.reviewed_id]) {
-            grouped[r.reviewed_id].reviewCount++;
-          }
-        });
-      }
-
-      let result = Object.values(grouped);
-
-      if (search.trim()) {
-        const term = search.toLowerCase();
-        result = result.filter((s) =>
-          s.seller.full_name.toLowerCase().includes(term)
-        );
-      }
-
-      result = result.filter((s) => {
-        const rating = s.seller.rating || 0;
-        const cheapest = Math.min(...s.gigs.map((g) => g.price));
-        return rating >= minRating && (maxPrice ? cheapest <= maxPrice : true);
+      const res = await fetch(url, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
       });
 
-      if (sort === "ai") {
-        result.sort((a, b) => {
-          const scoreA =
-            (a.seller.rating || 0) * 2 +
-            a.reviewCount +
-            (a.seller.is_verified ? 2 : 0) +
-            (a.seller.is_online ? 1 : 0);
-
-          const scoreB =
-            (b.seller.rating || 0) * 2 +
-            b.reviewCount +
-            (b.seller.is_verified ? 2 : 0) +
-            (b.seller.is_online ? 1 : 0);
-
-          return scoreB - scoreA;
-        });
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load sellers");
       }
 
-      return result;
+      return res.json();
     },
     enabled: !!decodedCategory,
   });
@@ -153,43 +81,51 @@ export default function CategoryPage() {
   const totalPages = Math.ceil((data?.length || 0) / PAGE_SIZE);
   const paginated = data?.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE) || [];
 
-  // Save/unsave seller
   const toggleSave = async (sellerId: string) => {
     if (!user) {
       toast.error("Please log in to save sellers");
       return;
     }
 
-    const { data: existing } = await supabase
-      .from("saved_sellers")
-      .select("id")
-      .eq("user_id", user.id)
-      .eq("seller_id", sellerId)
-      .maybeSingle();
-
-    if (existing) {
-      await supabase.from("saved_sellers").delete().eq("id", existing.id);
-      toast.success("Seller removed from saved");
-    } else {
-      await supabase.from("saved_sellers").insert({
-        user_id: user.id,
-        seller_id: sellerId,
+    try {
+      const checkRes = await fetch(`/api/saved/${sellerId}`, {
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token") || ""}` },
       });
-      toast.success("Seller saved");
+
+      const isSaved = checkRes.ok && (await checkRes.json()).saved;
+
+      if (isSaved) {
+        await fetch(`/api/saved/${sellerId}`, {
+          method: "DELETE",
+          headers: { Authorization: `Bearer ${localStorage.getItem("access_token") || ""}` },
+        });
+        toast.success("Seller removed from saved");
+      } else {
+        await fetch("/api/saved", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+          body: JSON.stringify({ seller_id: sellerId }),
+        });
+        toast.success("Seller saved");
+      }
+    } catch (err) {
+      toast.error("Failed to update saved status");
     }
   };
 
-  // Fixed: proper function to message seller (navigates to chat)
   const messageSeller = (sellerId: string) => {
     if (!user) {
       toast.error("Please log in to message sellers");
       return;
     }
-    navigate(`/chat/${sellerId}`); // direct chat with seller
+    navigate(`/chat/${sellerId}`);
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24 md:ml-64">
       <div className="max-w-7xl mx-auto flex gap-10">
         {/* Sticky Sidebar */}
         <div className="w-72 hidden lg:block sticky top-10 h-fit bg-slate-900/70 p-6 rounded-xl border border-slate-700">

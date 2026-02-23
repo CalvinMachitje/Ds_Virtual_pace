@@ -1,7 +1,6 @@
 // src/pages/admin/AdminProfile.tsx
 import { useState, useEffect } from 'react';
 import { useAuth } from '@/context/AuthContext';
-import { supabase } from '@/lib/supabase';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -10,9 +9,7 @@ import { Label } from '@/components/ui/label';
 import { Switch } from '@/components/ui/switch';
 import { Loader2, Save, ShieldCheck, KeyRound, User } from 'lucide-react';
 import { Separator } from '@/components/ui/separator';
-import { PostgrestError } from '@supabase/supabase-js';
 
-// Define the expected shape of the admins table row
 interface AdminProfile {
   id: string;
   email: string;
@@ -38,27 +35,29 @@ export default function AdminProfile() {
   const [saving, setSaving] = useState(false);
   const [loading, setLoading] = useState(true);
 
-  // Load admin profile data
+  // Load admin profile data from Flask API
   useEffect(() => {
     if (!session?.user?.id || !isAdmin) return;
 
     const loadProfile = async () => {
       setLoading(true);
       try {
-        const { data, error } = await supabase
-          .from('admins')
-          .select('*')
-          .eq('id', session.user.id)
-          .single();
+        const res = await fetch(`/api/admin/profile/${session.user.id}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem('access_token') || ''}`,
+          },
+        });
 
-        if (error) throw error;
-        if (!data) throw new Error('Admin profile not found');
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || 'Failed to load profile');
+        }
 
-        setProfile(data as AdminProfile);
+        const data = await res.json();
+        setProfile(data);
         setFormData(prev => ({ ...prev, full_name: data.full_name || '' }));
         setPermissions(data.permissions || {});
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      } catch (err: any | Error) {
+      } catch (err: any) {
         toast.error(err.message || 'Failed to load admin profile');
         console.error('Profile load error:', err);
       } finally {
@@ -69,13 +68,11 @@ export default function AdminProfile() {
     loadProfile();
   }, [session?.user?.id, isAdmin]);
 
-  // Handle text input changes
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
     setFormData(prev => ({ ...prev, [name]: value }));
   };
 
-  // Handle permission toggles
   const handlePermissionToggle = (key: string) => {
     setPermissions(prev => ({
       ...prev,
@@ -83,53 +80,44 @@ export default function AdminProfile() {
     }));
   };
 
-  // Save profile changes
   const handleSave = async () => {
     if (!session?.user?.id || !profile) return;
 
     setSaving(true);
 
     try {
-      // 1. Update full name & permissions
-      const { error: profileError } = await supabase
-        .from('admins')
-        .update({
+      const res = await fetch(`/api/admin/profile/${session.user.id}`, {
+        method: 'PATCH',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${localStorage.getItem('access_token') || ''}`,
+        },
+        body: JSON.stringify({
           full_name: formData.full_name.trim(),
           permissions,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', session.user.id);
+          ...(formData.newPassword && {
+            new_password: formData.newPassword,
+            confirm_password: formData.confirmPassword,
+          }),
+        }),
+      });
 
-      if (profileError) throw profileError;
-
-      // 2. Update password if provided
-      if (formData.newPassword) {
-        if (formData.newPassword !== formData.confirmPassword) {
-          throw new Error('New password and confirmation do not match');
-        }
-
-        if (formData.newPassword.length < 6) {
-          throw new Error('New password must be at least 6 characters');
-        }
-
-        const { error: passwordError } = await supabase.auth.updateUser({
-          password: formData.newPassword,
-        });
-
-        if (passwordError) throw passwordError;
-
-        // Clear password fields after success
-        setFormData(prev => ({
-          ...prev,
-          currentPassword: '',
-          newPassword: '',
-          confirmPassword: '',
-        }));
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || 'Failed to update profile');
       }
 
+      const updated = await res.json();
+      setProfile(updated);
+      setFormData(prev => ({
+        ...prev,
+        currentPassword: '',
+        newPassword: '',
+        confirmPassword: '',
+      }));
+
       toast.success('Profile updated successfully');
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    } catch (err: any | Error) {
+    } catch (err: any) {
       toast.error(err.message || 'Failed to update profile');
       console.error('Profile update error:', err);
     } finally {
@@ -139,7 +127,7 @@ export default function AdminProfile() {
 
   if (authLoading || loading) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
         <Loader2 className="h-12 w-12 animate-spin text-blue-500" />
       </div>
     );
@@ -147,7 +135,7 @@ export default function AdminProfile() {
 
   if (!isAdmin || !profile) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white md:ml-64">
         <div className="text-center">
           <ShieldCheck className="h-16 w-16 mx-auto mb-4 text-red-500" />
           <h2 className="text-2xl font-bold mb-2">Access Denied</h2>
@@ -158,7 +146,7 @@ export default function AdminProfile() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-8">
           <ShieldCheck className="h-10 w-10 text-blue-500" />

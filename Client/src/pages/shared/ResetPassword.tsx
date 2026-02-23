@@ -6,7 +6,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import { Lock, Eye, EyeOff, Link } from "lucide-react";
-import { supabase } from "@/lib/supabase";
+import { toast } from "sonner";
 
 export default function ResetPassword() {
   const [password, setPassword] = useState("");
@@ -20,7 +20,7 @@ export default function ResetPassword() {
   const navigate = useNavigate();
   const location = useLocation();
   const searchParams = new URLSearchParams(location.search);
-  const token = searchParams.get("token");  // Supabase reset token from email link
+  const token = searchParams.get("token");
 
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -40,32 +40,41 @@ export default function ResetPassword() {
     }
 
     if (!token) {
-      setError("Invalid reset link. Please request a new one.");
+      setError("Invalid or missing reset token");
       setLoading(false);
       return;
     }
 
-    const { error } = await supabase.auth.updateUser({
-      password,
-    });
+    try {
+      const res = await fetch("/api/auth/reset-password", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ token, password }),
+      });
 
-    if (error) {
-      setError(error.message);
-    } else {
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to reset password");
+      }
+
       setSuccess(true);
+      toast.success("Password reset successful! You can now log in.");
+    } catch (err: any) {
+      setError(err.message || "Something went wrong");
+      toast.error(err.message || "Failed to reset password");
+    } finally {
+      setLoading(false);
     }
-
-    setLoading(false);
   };
 
   if (success) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
         <Card className="w-full max-w-md border-slate-800 bg-slate-900/70 backdrop-blur-md shadow-2xl">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl text-white">Password Reset Successful</CardTitle>
             <CardDescription className="text-slate-400 mt-2">
-              Your password has been updated. You can now log in with your new password.
+              You can now log in with your new password.
             </CardDescription>
           </CardHeader>
           <CardContent className="text-center">
@@ -79,12 +88,12 @@ export default function ResetPassword() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
       <Card className="w-full max-w-md border-slate-800 bg-slate-900/70 backdrop-blur-md shadow-2xl">
         <CardHeader className="space-y-1 text-center">
           <CardTitle className="text-3xl font-bold text-white">Reset Password</CardTitle>
           <CardDescription className="text-slate-400">
-            Enter a new password for your account
+            Enter your new password
           </CardDescription>
         </CardHeader>
 
@@ -95,7 +104,6 @@ export default function ResetPassword() {
             </div>
           )}
 
-          {/* Password */}
           <div className="space-y-2">
             <Label htmlFor="password" className="text-slate-200">New Password</Label>
             <div className="relative">
@@ -117,7 +125,6 @@ export default function ResetPassword() {
             </div>
           </div>
 
-          {/* Confirm Password */}
           <div className="space-y-2">
             <Label htmlFor="confirm-password" className="text-slate-200">Confirm Password</Label>
             <div className="relative">
@@ -141,7 +148,7 @@ export default function ResetPassword() {
 
           <Button
             onClick={handleReset}
-            disabled={loading}
+            disabled={loading || !password || !confirmPassword}
             className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-6 text-lg disabled:opacity-50"
           >
             {loading ? "Resetting..." : "Reset Password"}
@@ -149,7 +156,7 @@ export default function ResetPassword() {
         </CardContent>
 
         <CardFooter className="text-center text-sm text-slate-400 pt-6 border-t border-slate-800">
-          <Link to="/LoginPage" className="text-blue-400 hover:text-blue-300 hover:underline">
+          <Link to="/login" className="text-blue-400 hover:text-blue-300 hover:underline">
             Back to Login
           </Link>
         </CardFooter>

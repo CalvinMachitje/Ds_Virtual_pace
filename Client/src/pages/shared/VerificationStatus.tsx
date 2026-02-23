@@ -8,7 +8,7 @@ import { ShieldCheck, CheckCircle2, Star, Clock, UserCheck } from "lucide-react"
 import { Button } from "@/components/ui/button";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { supabase } from "@/lib/supabase";
+import { toast } from "sonner";
 
 type Verification = {
   trust_score: number;
@@ -22,44 +22,33 @@ type Verification = {
   }[];
 };
 
-const fetchVerification = async (id: string) => {
-  const { data, error } = await supabase
-    .from("profiles")
-    .select("trust_score, jobs_done, rating") // Assume these columns exist or add them
-    .eq("id", id)
-    .maybeSingle();
-
-  if (error) throw error;
-
-  // Credentials - mock or fetch from a verifications table
-  return {
-    ...data,
-    credentials: [
-      {
-        title: "Identity Verified",
-        desc: "Government ID check passed",
-        detail: "Verified via Stripe Identity on Oct 12, 2023",
-        icon: UserCheck,
-      },
-      { title: "Background Check", desc: "Criminal & employment history clear", icon: ShieldCheck },
-      { title: "Skills Assessment", desc: "Top 10% in Data Entry", icon: Star },
-      { title: "D's Certified", desc: "Email Management Training completed", icon: CheckCircle2 },
-    ],
-  } as Verification;
-};
-
 export default function VerificationStatus() {
   const { id } = useParams<{ id: string }>();
 
   const { data: verification, isLoading, error, refetch } = useQuery<Verification>({
     queryKey: ["verification", id],
-    queryFn: () => fetchVerification(id || ""),
+    queryFn: async () => {
+      if (!id) throw new Error("No profile ID");
+
+      const res = await fetch(`/api/profiles/${id}/verification`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Verification not found");
+      }
+
+      return res.json();
+    },
     enabled: !!id,
   });
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
         <p className="text-xl mb-4">Failed to load verification</p>
         <p className="text-slate-400 mb-6">{(error as Error).message}</p>
         <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
@@ -70,7 +59,7 @@ export default function VerificationStatus() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6 md:ml-64">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-2">Verification Status</h1>
         <p className="text-slate-400 mb-8">Trust Score & Credentials</p>
@@ -153,7 +142,7 @@ export default function VerificationStatus() {
             </div>
 
             <Button className="w-full mt-8 bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 py-7 text-lg">
-              Hire Sarah Now →
+              Hire Now →
             </Button>
           </>
         )}

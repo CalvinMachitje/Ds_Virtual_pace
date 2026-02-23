@@ -19,7 +19,6 @@ import { Label } from "@/components/ui/label";
 import { Briefcase, Star, Loader2, MessageSquare, Calendar, User, CheckCircle2 } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
@@ -40,44 +39,6 @@ type Gig = {
   created_at: string;
 };
 
-const fetchGigDetail = async (id: string) => {
-  const { data, error } = await supabase
-    .from("gigs")
-    .select(`
-      id,
-      title,
-      description,
-      price,
-      category,
-      created_at,
-      image_url,
-      seller_id,
-      profiles!seller_id (
-        full_name,
-        avatar_url,
-        is_verified,
-        rating,
-        review_count
-      )
-    `)
-    .eq("id", id)
-    .maybeSingle();
-
-  if (error) throw error;
-  if (!data) throw new Error("Gig not found");
-
-  const profile = Array.isArray(data.profiles) ? data.profiles[0] : data.profiles;
-
-  return {
-    ...data,
-    seller_name: profile?.full_name || "Unknown",
-    seller_avatar_url: profile?.avatar_url,
-    seller_is_verified: profile?.is_verified || false,
-    rating: profile?.rating || 0,
-    review_count: profile?.review_count || 0,
-  } as Gig;
-};
-
 export default function GigDetail() {
   const { id } = useParams<{ id: string }>();
   const { user } = useAuth();
@@ -87,31 +48,52 @@ export default function GigDetail() {
   const [showBookingModal, setShowBookingModal] = useState(false);
   const [bookingNote, setBookingNote] = useState("");
 
-  const { data: gig, isLoading, error, refetch } = useQuery<Gig>({
+  const { data: gig, isLoading, error } = useQuery<Gig>({
     queryKey: ["gig", id],
-    queryFn: () => fetchGigDetail(id || ""),
+    queryFn: async () => {
+      if (!id) throw new Error("No gig ID");
+
+      const res = await fetch(`/api/gigs/${id}`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Gig not found");
+      }
+
+      return res.json();
+    },
     enabled: !!id,
   });
 
-  // ── Booking Mutation ──
+  // Booking mutation
   const createBooking = useMutation({
     mutationFn: async () => {
       if (!user || !gig) throw new Error("User or gig not loaded");
 
-      const { error } = await supabase
-        .from("bookings")
-        .insert({
+      const res = await fetch("/api/bookings", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({
           gig_id: gig.id,
-          buyer_id: user.id,
-          seller_id: gig.seller_id,
           price: gig.price,
           service: gig.title,
-          start_time: new Date().toISOString(),
-          end_time: new Date(new Date().getTime() + 60 * 60 * 1000).toISOString(),
-          status: "pending",
-        });
+          note: bookingNote.trim() || undefined,
+        }),
+      });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to create booking");
+      }
+
+      return res.json();
     },
     onSuccess: () => {
       toast.success("Booking request sent! Seller will review it soon.");
@@ -124,8 +106,8 @@ export default function GigDetail() {
     },
   });
 
-  // ── Direct Message Seller (fixed - starts new chat if none exists) ──
-  const messageSeller = async () => {
+  // Message seller (direct chat)
+  const messageSeller = () => {
     if (!user) {
       toast.error("Please log in to message the seller");
       return;
@@ -136,46 +118,7 @@ export default function GigDetail() {
       return;
     }
 
-    const sellerId = gig.seller_id;
-
-    try {
-      toast.info("Checking for existing conversation...");
-
-      // Check for ANY direct message between buyer and seller
-      const { data: existingThread, error: threadError } = await supabase
-        .from("messages")
-        .select("id")
-        .or(
-          `and(sender_id.eq.${user.id},receiver_id.eq.${sellerId}),and(sender_id.eq.${sellerId},receiver_id.eq.${user.id})`
-        )
-        .limit(1);
-
-      if (threadError) throw threadError;
-
-      if (existingThread && existingThread.length > 0) {
-        toast.success("Opening existing conversation...");
-        navigate(`/chat/${sellerId}`);
-        return;
-      }
-
-      // No existing thread → start new direct conversation
-      const { error: insertError } = await supabase
-        .from("messages")
-        .insert({
-          sender_id: user.id,
-          receiver_id: sellerId,
-          content: `Hello! I'm interested in your gig: "${gig.title}". Can we chat more about it?`,
-          // No booking_id — this is a direct message
-        });
-
-      if (insertError) throw insertError;
-
-      toast.success("New conversation started! Opening chat...");
-      navigate(`/chat/${sellerId}`);
-    } catch (err: any) {
-      console.error("Messaging error:", err);
-      toast.error("Failed to start conversation: " + (err.message || "Unknown error"));
-    }
+    navigate(`/chat/${gig.seller_id}`);
   };
 
   const goToSellerProfile = () => {
@@ -186,14 +129,14 @@ export default function GigDetail() {
   if (isLoading) return <Skeleton className="min-h-screen" />;
 
   if (error) return (
-    <div className="min-h-screen flex flex-col items-center justify-center text-red-400">
+    <div className="min-h-screen flex flex-col items-center justify-center text-red-400 md:ml-64">
       <p>Failed to load gig</p>
-      <Button onClick={() => refetch()}>Retry</Button>
+      <Button onClick={() => window.location.reload()}>Retry</Button>
     </div>
   );
 
   if (!gig) return (
-    <div className="min-h-screen flex flex-col items-center justify-center text-slate-400">
+    <div className="min-h-screen flex flex-col items-center justify-center text-slate-400 md:ml-64">
       <Briefcase className="h-16 w-16 mb-6 opacity-50" />
       <h2 className="text-2xl font-bold mb-2">Gig Not Found</h2>
       <Link to="/gigs">
@@ -203,7 +146,7 @@ export default function GigDetail() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-900 p-6">
+    <div className="min-h-screen bg-slate-900 p-6 md:ml-64">
       <div className="max-w-4xl mx-auto">
         <img
           src={gig.image_url || "/placeholder-gig-large.jpg"}
@@ -216,7 +159,7 @@ export default function GigDetail() {
 
         <p className="text-slate-300 mb-8 whitespace-pre-line">{gig.description}</p>
 
-        {/* Prominent Seller Block – Clickable to view profile/portfolio */}
+        {/* Prominent Seller Block */}
         <div 
           className="mb-10 p-6 bg-slate-800/70 rounded-2xl border border-slate-700 hover:border-blue-600 transition-all cursor-pointer group shadow-lg"
           onClick={goToSellerProfile}

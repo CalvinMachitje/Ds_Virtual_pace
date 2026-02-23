@@ -6,9 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Search, Zap, Briefcase, Star } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { supabase } from "@/lib/supabase";
 import { Link } from "react-router-dom";
 import { Avatar, AvatarImage, AvatarFallback } from "@radix-ui/react-avatar";
+import { toast } from "sonner";
 
 type Category = { name: string; count: number };
 type FeaturedVA = {
@@ -20,47 +20,18 @@ type FeaturedVA = {
 };
 
 const fetchBuyerDashboard = async () => {
-  // Trending categories (count of gigs per category)
-  const { data: categoriesData } = await supabase
-    .from("gigs")
-    .select("category");
+  const res = await fetch("/api/buyer/dashboard", {
+    headers: {
+      Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+    },
+  });
 
-  const categoryCount = categoriesData?.reduce((acc, gig) => {
-    acc[gig.category] = (acc[gig.category] || 0) + 1;
-    return acc;
-  }, {} as Record<string, number>);
+  if (!res.ok) {
+    const err = await res.json();
+    throw new Error(err.error || "Failed to load dashboard data");
+  }
 
-  const trendingCategories: Category[] = Object.entries(categoryCount || {})
-    .map(([name, count]) => ({ name, count }))
-    .sort((a, b) => b.count - a.count)
-    .slice(0, 8);
-
-  // Featured VAs (top-rated sellers with starting price in Rand)
-  const { data: vas } = await supabase
-    .from("profiles")
-    .select("id, full_name, rating, avatar_url")
-    .eq("role", "seller")
-    .order("rating", { ascending: false })
-    .limit(6);
-
-  const featuredVAs: FeaturedVA[] = await Promise.all(
-    (vas || []).map(async (va) => {
-      const { data: minPrice } = await supabase
-        .from("gigs")
-        .select("price")
-        .eq("seller_id", va.id)
-        .order("price", { ascending: true })
-        .limit(1)
-        .maybeSingle();
-
-      return {
-        ...va,
-        starting_price: minPrice?.price || 250,
-      };
-    })
-  );
-
-  return { trendingCategories, featuredVAs };
+  return res.json() as Promise<{ trendingCategories: Category[]; featuredVAs: FeaturedVA[] }>;
 };
 
 export default function BuyerDashboard() {

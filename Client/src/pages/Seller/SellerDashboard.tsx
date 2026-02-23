@@ -5,7 +5,6 @@ import { Button } from "@/components/ui/button";
 import { DollarSign, Star, Briefcase, Calendar, Users, CreditCard, AlertCircle } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { Link } from "react-router-dom";
 
@@ -18,64 +17,28 @@ type SellerStats = {
   monthlyEarnings: number;
 };
 
-const fetchSellerStats = async (userId: string) => {
-  const { count: gigsCount } = await supabase
-    .from("gigs")
-    .select("*", { count: "exact", head: true })
-    .eq("seller_id", userId)
-    .eq("status", "published");
-
-  const { count: activeCount } = await supabase
-    .from("bookings")
-    .select("*", { count: "exact", head: true })
-    .eq("seller_id", userId)
-    .in("status", ["pending", "accepted", "in_progress"]);
-
-  const { count: completedCount } = await supabase
-    .from("bookings")
-    .select("*", { count: "exact", head: true })
-    .eq("seller_id", userId)
-    .eq("status", "completed");
-
-  const { data: reviews } = await supabase
-    .from("reviews")
-    .select("rating")
-    .eq("reviewed_id", userId);
-
-  const avgRating = reviews?.length
-    ? reviews.reduce((sum, r) => sum + r.rating, 0) / reviews.length
-    : 0;
-
-  const startOfMonth = new Date();
-  startOfMonth.setDate(1);
-  startOfMonth.setHours(0, 0, 0, 0);
-
-  const { data: earnings } = await supabase
-    .from("bookings")
-    .select("price")
-    .eq("seller_id", userId)
-    .eq("status", "completed")
-    .gte("created_at", startOfMonth.toISOString());
-
-  const monthlyEarnings = earnings?.reduce((sum, b) => sum + (b.price || 0), 0) || 0;
-
-  return {
-    activeGigs: gigsCount || 0,
-    activeBookings: activeCount || 0,
-    completedBookings: completedCount || 0,
-    rating: avgRating,
-    reviewCount: reviews?.length || 0,
-    monthlyEarnings,
-  };
-};
-
 export default function SellerDashboard() {
   const { user } = useAuth();
   const userId = user?.id;
 
   const { data: stats, isLoading, error, refetch } = useQuery<SellerStats>({
     queryKey: ["seller-dashboard", userId],
-    queryFn: () => fetchSellerStats(userId || ""),
+    queryFn: async () => {
+      if (!userId) throw new Error("Not logged in");
+
+      const res = await fetch("/api/seller/dashboard", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load dashboard");
+      }
+
+      return res.json();
+    },
     enabled: !!userId,
   });
 

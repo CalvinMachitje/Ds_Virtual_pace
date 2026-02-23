@@ -2,7 +2,6 @@
 // src/pages/seller/SellerBookings.tsx
 import { useQuery, useQueryClient, useMutation } from "@tanstack/react-query";
 import { useEffect } from "react";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -15,15 +14,8 @@ import { useNavigate } from "react-router-dom";
 
 type Booking = {
   id: string;
-  gig: {
-    id: string;
-    title: string;
-    price: number;
-  };
-  buyer: {
-    id: string;
-    full_name: string;
-  };
+  gig: { id: string; title: string; price: number };
+  buyer: { id: string; full_name: string };
   status: "pending" | "accepted" | "rejected" | "completed" | "cancelled";
   price: number;
   requirements?: string;
@@ -41,103 +33,56 @@ export default function SellerBookings() {
     queryFn: async () => {
       if (!user?.id) throw new Error("Not logged in");
 
-      const { data, error } = await supabase
-        .from("bookings")
-        .select(`
-          id, status, price, requirements, created_at, updated_at,
-          gig:gig_id (id, title, price),
-          buyer:buyer_id (id, full_name)
-        `)
-        .eq("seller_id", user.id)
-        .order("created_at", { ascending: false });
-
-      if (error) throw error;
-
-      // Normalize gig and buyer
-      const normalized = (data || []).map((row: any) => {
-        const gig = Array.isArray(row.gig) ? row.gig[0] ?? null : row.gig;
-        const buyer = Array.isArray(row.buyer) ? row.buyer[0] ?? null : row.buyer;
-
-        return {
-          id: row.id,
-          status: row.status,
-          price: row.price,
-          requirements: row.requirements,
-          created_at: row.created_at,
-          updated_at: row.updated_at,
-          gig,
-          buyer,
-        } as Booking;
+      const res = await fetch("/api/seller/bookings", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
       });
 
-      return normalized;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load bookings");
+      }
+
+      return res.json();
     },
     enabled: !!user?.id,
   });
 
+  // Poll for new bookings every 30 seconds (replace with WebSocket later)
   useEffect(() => {
     if (!user?.id) return;
 
-    const channel = supabase
-      .channel(`seller-bookings:${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "bookings",
-          filter: `seller_id=eq.${user.id}`,
-        },
-        (payload) => {
-          const booking = payload.new || payload.old;
-          const gigTitle = (payload.new as any)?.gig?.title || "a gig";
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["seller-bookings", user.id] });
+    }, 30000);
 
-          if (payload.eventType === "INSERT") {
-            toast.info(`New booking request for "${gigTitle}"`);
-          } else if (payload.eventType === "UPDATE") {
-            const newStatus = payload.new.status;
-            const oldStatus = payload.old.status;
-
-            if (newStatus !== oldStatus) {
-              if (newStatus === "accepted") {
-                toast.success(`You accepted booking for "${gigTitle}"`);
-              } else if (newStatus === "rejected") {
-                toast.warning(`You rejected booking for "${gigTitle}"`);
-              } else if (newStatus === "cancelled") {
-                toast.info(`Booking for "${gigTitle}" was cancelled by buyer`);
-              }
-            }
-          } else if (payload.eventType === "DELETE") {
-            toast.warning(`A booking for "${gigTitle}" was deleted`);
-          }
-
-          queryClient.invalidateQueries({ queryKey: ["seller-bookings", user.id] });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => clearInterval(interval);
   }, [user?.id, queryClient]);
 
   const updateBookingStatus = useMutation({
     mutationFn: async ({ bookingId, newStatus }: { bookingId: string; newStatus: string }) => {
-      if (!user?.id) throw new Error("Not authenticated");
+      const res = await fetch(`/api/seller/bookings/${bookingId}/status`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
 
-      const { error } = await supabase
-        .from("bookings")
-        .update({ status: newStatus })
-        .eq("id", bookingId)
-        .eq("seller_id", user.id);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to update booking");
+      }
 
-      if (error) throw error;
+      return res.json();
     },
     onSuccess: (_, variables) => {
       toast.success(`Booking ${variables.newStatus === "accepted" ? "accepted" : "rejected"}`);
       queryClient.invalidateQueries({ queryKey: ["seller-bookings", user?.id] });
     },
-    onError: (err) => {
+    onError: (err: any) => {
       toast.error("Failed to update booking: " + err.message);
     },
   });
@@ -166,7 +111,7 @@ export default function SellerBookings() {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
         <p className="text-xl mb-4">Failed to load bookings</p>
-        <p className="text-slate-400 mb-6">{error.message}</p>
+        <p className="text-slate-400 mb-6">{(error as Error).message}</p>
         <Button onClick={() => queryClient.refetchQueries({ queryKey: ["seller-bookings", user?.id] })}>
           Retry
         </Button>

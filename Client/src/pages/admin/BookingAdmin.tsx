@@ -1,6 +1,5 @@
-// src/pages/admin/BookingsAdmin.tsx (Managing bookings)
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+// src/pages/admin/BookingsAdmin.tsx
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -20,42 +19,67 @@ type Booking = {
 };
 
 export default function BookingsAdmin() {
+  const queryClient = useQueryClient();
+
   const { data: bookings, isLoading, refetch } = useQuery<Booking[]>({
     queryKey: ["admin-bookings"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("bookings")
-        .select("*");
+      const res = await fetch("/api/admin/bookings", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) {
-        toast.error("Failed to load bookings: " + error.message);
-        throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error("Failed to load bookings: " + (err.error || "Unknown error"));
+        throw new Error(err.error || "Failed");
       }
 
-      return data || [];
+      return res.json();
     },
   });
 
-  const handleUpdateStatus = async (bookingId: string, newStatus: Booking["status"]) => {
-    const { error } = await supabase
-      .from("bookings")
-      .update({ status: newStatus })
-      .eq("id", bookingId);
+  const updateStatusMutation = useMutation({
+    mutationFn: async ({ bookingId, newStatus }: { bookingId: string; newStatus: Booking["status"] }) => {
+      const res = await fetch(`/api/admin/bookings/${bookingId}/status`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ status: newStatus }),
+      });
 
-    if (error) {
-      toast.error("Failed to update status: " + error.message);
-    } else {
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to update status");
+      }
+
+      return res.json();
+    },
+    onSuccess: () => {
       toast.success("Booking status updated");
-      refetch();
-    }
-  };
+      queryClient.invalidateQueries({ queryKey: ["admin-bookings"] });
+    },
+    onError: (err: any) => {
+      toast.error(err.message || "Failed to update status");
+    },
+  });
 
   if (isLoading) {
-    return <Skeleton height={500} />;
+    return (
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+        <div className="max-w-6xl mx-auto">
+          <Skeleton className="h-12 w-64 mb-8" />
+          <Skeleton height={500} />
+        </div>
+      </div>
+    );
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Manage Bookings</h1>
 
@@ -92,16 +116,16 @@ export default function BookingsAdmin() {
                         <Button
                           variant="outline"
                           size="sm"
-                          onClick={() => handleUpdateStatus(b.id, "completed")}
-                          disabled={b.status === "completed"}
+                          onClick={() => updateStatusMutation.mutate({ bookingId: b.id, newStatus: "completed" })}
+                          disabled={b.status === "completed" || updateStatusMutation.isPending}
                         >
                           Complete
                         </Button>
                         <Button
                           variant="destructive"
                           size="sm"
-                          onClick={() => handleUpdateStatus(b.id, "cancelled")}
-                          disabled={b.status === "cancelled"}
+                          onClick={() => updateStatusMutation.mutate({ bookingId: b.id, newStatus: "cancelled" })}
+                          disabled={b.status === "cancelled" || updateStatusMutation.isPending}
                         >
                           Cancel
                         </Button>

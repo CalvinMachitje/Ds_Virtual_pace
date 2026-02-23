@@ -9,7 +9,6 @@ import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { User, Mail, Lock, Eye, EyeOff, ArrowLeft, Phone, Facebook, Chrome, Loader2 } from "lucide-react";
 import { useAuth } from "@/context/AuthContext";
-import { supabase } from "@/lib/supabase";
 import { Link } from "react-router-dom";
 import { toast } from "sonner";
 
@@ -79,35 +78,23 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      // Sign up with metadata (type assertion to match extended AuthContext type)
-      const { data: signUpData, error: signUpError } = await signUp({
+      const { error: signUpError } = await signUp({
         email: email.trim(),
         password: password.trim(),
-        options: {
-          data: {
-            full_name: fullName.trim(),
-            phone: phone.trim() || null,
-            role,
-          } as { full_name: string; phone: string | null; role: "buyer" | "seller" },
-        },
+        full_name: fullName.trim(),
+        phone: phone.trim() || null,
+        role,
       });
 
       if (signUpError) throw signUpError;
 
-      // If email confirmation required (recommended for production)
-      if (!signUpData.session) {
-        setEmailConfirmSent(true);
-        toast.info("Check your email for confirmation link");
-        return;
-      }
-
-      // Auto-confirmed (dev mode)
-      toast.success("Account created successfully!");
-      navigate("/dashboard");
+      // If backend requires email confirmation
+      setEmailConfirmSent(true);
+      toast.info("Check your email for confirmation link");
     } catch (err: any) {
-      console.error("Signup error:", err);
-      setError(err.message || "Failed to create account");
-      toast.error(err.message || "Signup failed");
+      const message = err.message || "Failed to create account";
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -118,16 +105,33 @@ export default function SignupPage() {
     setLoading(true);
 
     try {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider,
-        options: {
-          redirectTo: `${window.location.origin}/dashboard`,
+      const res = await fetch(`/api/auth/oauth/${provider}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify({
+          redirectTo: `${window.location.origin}/dashboard`,
+        }),
       });
-      if (error) throw error;
+
+      const data = await res.json();
+
+      if (!res.ok) {
+        throw new Error(data.error || `Failed to initiate ${provider} signup`);
+      }
+
+      // If backend returns redirect URL (OAuth flow)
+      if (data.redirectUrl) {
+        window.location.href = data.redirectUrl;
+        return;
+      }
+
+      toast.info("Redirecting to OAuth provider...");
     } catch (err: any) {
-      setError(err.message);
-      toast.error(err.message || "OAuth login failed");
+      const message = err.message || "OAuth signup failed";
+      setError(message);
+      toast.error(message);
     } finally {
       setLoading(false);
     }
@@ -135,7 +139,7 @@ export default function SignupPage() {
 
   if (emailConfirmSent) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
         <Card className="w-full max-w-md border-slate-800 bg-slate-900/70 backdrop-blur-md shadow-2xl">
           <CardHeader className="text-center">
             <CardTitle className="text-2xl text-white">Confirm Your Email</CardTitle>
@@ -147,14 +151,21 @@ export default function SignupPage() {
           <CardContent className="text-center space-y-4">
             <Button
               onClick={async () => {
-                const { error } = await supabase.auth.resend({
-                  type: "signup",
-                  email: email.trim(),
-                });
-                if (error) {
-                  toast.error(error.message);
-                } else {
+                try {
+                  const res = await fetch("/api/auth/resend-confirmation", {
+                    method: "POST",
+                    headers: { "Content-Type": "application/json" },
+                    body: JSON.stringify({ email: email.trim() }),
+                  });
+
+                  if (!res.ok) {
+                    const data = await res.json();
+                    throw new Error(data.error || "Failed to resend");
+                  }
+
                   toast.success("Confirmation email resent!");
+                } catch (err: any) {
+                  toast.error(err.message || "Failed to resend email");
                 }
               }}
               className="bg-blue-600 hover:bg-blue-700 w-full"
@@ -173,7 +184,7 @@ export default function SignupPage() {
   }
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
       <Card className="w-full max-w-md border-slate-800 bg-slate-900/70 backdrop-blur-md shadow-2xl">
         <CardHeader className="space-y-1 text-center relative">
           <Link to="/" className="absolute left-4 top-4 text-slate-400 hover:text-white">

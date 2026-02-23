@@ -1,5 +1,5 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// src/pages/Seller/SellerProfile.tsx
+// src/pages/seller/SellerProfile.tsx
 import { useState, useEffect, useRef, ChangeEvent } from "react";
 import {
   ArrowLeft,
@@ -25,7 +25,6 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Skeleton } from "@/components/ui/skeleton";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import {
@@ -157,22 +156,19 @@ export default function SellerProfile() {
         setVerificationLoading(true);
         setError(null);
 
-        // Profile – public fetch, no role restriction
-        const { data: profileData, error: pErr } = await supabase
-          .from("profiles")
-          .select(
-            `
-            id, full_name, phone, email, role, avatar_url, bio,
-            created_at, updated_at, average_rating, review_count,
-            is_verified, portfolio_images
-          `
-          )
-          .eq("id", id)
-          .maybeSingle();
+        // 1. Profile (public)
+        const profileRes = await fetch(`/api/profile/${id}`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+        });
 
-        if (pErr) throw pErr;
-        if (!profileData) throw new Error("Profile not found");
+        if (!profileRes.ok) {
+          const err = await profileRes.json();
+          throw new Error(err.error || "Profile not found");
+        }
 
+        const profileData = await profileRes.json();
         setProfile(profileData);
 
         if (isOwnProfile) {
@@ -182,54 +178,38 @@ export default function SellerProfile() {
           setEditAvatarUrl(profileData.avatar_url || "");
         }
 
-        // Reviews – public
-        const { data: reviewsData, error: rErr } = await supabase
-          .from("reviews")
-          .select(
-            `
-            id, rating, comment, created_at,
-            reviewer:profiles!reviewer_id (full_name, avatar_url)
-          `
-          )
-          .eq("reviewed_id", id)
-          .order("created_at", { ascending: false })
-          .limit(10);
+        // 2. Reviews (public)
+        const reviewsRes = await fetch(`/api/profile/${id}/reviews`, {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+        });
 
-        if (rErr) console.warn("Reviews fetch warning:", rErr);
+        if (reviewsRes.ok) {
+          const reviewsData = await reviewsRes.json();
+          setReviews(
+            reviewsData.map((r: any) => ({
+              id: r.id,
+              rating: r.rating,
+              comment: r.comment,
+              created_at: r.created_at,
+              reviewer: r.reviewer || { full_name: "Anonymous", avatar_url: null },
+            }))
+          );
+        }
 
-        setReviews(
-          (reviewsData || []).map((r: any) => ({
-            id: r.id,
-            rating: r.rating,
-            comment: r.comment,
-            created_at: r.created_at,
-            reviewer: r.reviewer?.[0] ?? { full_name: "Anonymous", avatar_url: null },
-          }))
-        );
-
-        // Verification – only load if seller and own profile (private)
+        // 3. Verification (only own seller profile)
         if (profileData.role === "seller" && isOwnProfile) {
-          const { data: verRaw, error: vErr } = await supabase
-            .from("verifications")
-            .select("id, status, evidence_urls, submitted_at, rejection_reason")
-            .eq("seller_id", id)
-            .order("submitted_at", { ascending: false })
-            .limit(1)
-            .maybeSingle();
+          const verRes = await fetch("/api/seller/verification", {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+            },
+          });
 
-          if (vErr) console.warn("Verification fetch warning:", vErr);
-
-          const ver = verRaw
-            ? ({
-                id: verRaw.id,
-                status: verRaw.status ?? null,
-                evidence_urls: verRaw.evidence_urls ?? [],
-                submitted_at: verRaw.submitted_at,
-                rejection_reason: verRaw.rejection_reason ?? null,
-              } as Verification)
-            : null;
-
-          setVerification(ver);
+          if (verRes.ok) {
+            const verData = await verRes.json();
+            setVerification(verData);
+          }
         }
       } catch (err: any) {
         console.error("Fetch error:", err);
@@ -244,57 +224,6 @@ export default function SellerProfile() {
 
     fetchData();
   }, [id, isOwnProfile]);
-
-  // ── Real-time verification updates (only for own seller profile) ────────
-  useEffect(() => {
-    if (!isOwnProfile || profile?.role !== "seller" || !user?.id) return;
-
-    const channel = supabase
-      .channel(`verifications:seller:${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "*",
-          schema: "public",
-          table: "verifications",
-          filter: `seller_id=eq.${user.id}`,
-        },
-        (payload) => {
-          const newData = payload.new as {
-            id?: string;
-            status?: string | null;
-            evidence_urls?: string[] | null;
-            submitted_at?: string;
-            rejection_reason?: string | null;
-          } | null;
-
-          if (!newData || !newData.id) return;
-
-          const newVer: Verification = {
-            id: newData.id,
-            status: (newData.status as "pending" | "approved" | "rejected") ?? null,
-            evidence_urls: newData.evidence_urls ?? [],
-            submitted_at: newData.submitted_at ?? new Date().toISOString(),
-            rejection_reason: newData.rejection_reason ?? null,
-          };
-
-          setVerification(newVer);
-
-          if (newVer.status === "approved") {
-            toast.success("Your seller account has been verified!");
-          } else if (newVer.status === "rejected") {
-            toast.error(
-              `Verification rejected: ${newVer.rejection_reason || "No reason provided"}`
-            );
-          }
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [isOwnProfile, profile?.role, user?.id]);
 
   // ── Portfolio Handlers (only owner) ─────────────────────────────────────
 
@@ -354,72 +283,42 @@ export default function SellerProfile() {
   };
 
   const uploadPortfolioImages = async () => {
-    if (pendingPortfolioFiles.length === 0 || !user?.id || !profile || !isOwnProfile) return;
+    if (pendingPortfolioFiles.length === 0 || !user?.id || !isOwnProfile) return;
 
     setUploadingPortfolio(true);
     let completed = 0;
-    const newUrls: string[] = [];
+
+    const formData = new FormData();
+    pendingPortfolioFiles.forEach((item) => {
+      formData.append("images", item.file);
+    });
 
     try {
-      for (const item of pendingPortfolioFiles) {
-        try {
-          const file = item.file;
-          const fileExt = file.name.split(".").pop() || "jpg";
-          const fileName = `${user.id}-${Date.now()}.${fileExt}`;
-          const filePath = `${user.id}/${fileName}`;
+      const res = await fetch("/api/seller/portfolio-images", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: formData,
+      });
 
-          const { error: uploadErr } = await supabase.storage
-            .from("portfolio-images")
-            .upload(filePath, file, { upsert: false, cacheControl: "3600" });
-
-          if (uploadErr) throw uploadErr;
-
-          const { data: urlData } = supabase.storage
-            .from("portfolio-images")
-            .getPublicUrl(filePath);
-
-          if (urlData.publicUrl) newUrls.push(urlData.publicUrl);
-
-          setPendingPortfolioFiles((prev) =>
-            prev.map((f) => (f.id === item.id ? { ...f, progress: 100 } : f))
-          );
-
-          completed++;
-          setPortfolioUploadProgress(Math.round((completed / pendingPortfolioFiles.length) * 100));
-        } catch (err: any) {
-          setPendingPortfolioFiles((prev) =>
-            prev.map((f) =>
-              f.id === item.id ? { ...f, error: err.message, progress: -1 } : f
-            )
-          );
-          toast.error(`Failed to upload ${item.name}`);
-        }
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to upload portfolio images");
       }
 
-      if (newUrls.length > 0) {
-        const currentImages = profile.portfolio_images ?? [];
+      const { urls } = await res.json();
 
-        const { error: updateErr } = await supabase
-          .from("profiles")
-          .update({
-            portfolio_images: [...currentImages, ...newUrls],
-            updated_at: new Date().toISOString(),
-          })
-          .eq("id", user.id);
+      // Update local profile state
+      setProfile((prev) =>
+        prev ? { ...prev, portfolio_images: [...(prev.portfolio_images ?? []), ...urls] } : null
+      );
 
-        if (updateErr) throw updateErr;
-
-        toast.success("Portfolio images added successfully!");
-
-        setProfile((prev) =>
-          prev ? { ...prev, portfolio_images: [...(prev.portfolio_images ?? []), ...newUrls] } : null
-        );
-
-        setPendingPortfolioFiles([]);
-        setPortfolioUploadProgress(0);
-      }
+      toast.success("Portfolio images added successfully!");
+      setPendingPortfolioFiles([]);
+      setPortfolioUploadProgress(0);
     } catch (err: any) {
-      toast.error("Portfolio upload failed");
+      toast.error(err.message || "Portfolio upload failed");
     } finally {
       setUploadingPortfolio(false);
       if (portfolioInputRef.current) portfolioInputRef.current.value = "";
@@ -455,33 +354,42 @@ export default function SellerProfile() {
 
       if (selectedAvatarFile) {
         setUploadingAvatar(true);
-        const fileExt = selectedAvatarFile.name.split(".").pop() || "jpg";
-        const fileName = `${user.id}-${Date.now()}.${fileExt}`;
-        const filePath = `avatars/${fileName}`;
+        const formData = new FormData();
+        formData.append("avatar", selectedAvatarFile);
 
-        const { error: uploadErr } = await supabase.storage
-          .from("avatars")
-          .upload(filePath, selectedAvatarFile, { upsert: true, cacheControl: "3600" });
+        const avatarRes = await fetch("/api/profile/avatar", {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+          body: formData,
+        });
 
-        if (uploadErr) throw uploadErr;
+        if (!avatarRes.ok) throw new Error("Avatar upload failed");
 
-        const { data: urlData } = supabase.storage.from("avatars").getPublicUrl(filePath);
-        avatarUrlToSave = urlData.publicUrl;
+        const { publicUrl } = await avatarRes.json();
+        avatarUrlToSave = publicUrl;
         setUploadingAvatar(false);
       }
 
-      const { error: updateErr } = await supabase
-        .from("profiles")
-        .update({
+      const updateRes = await fetch(`/api/profile/${user.id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({
           full_name: editFullName.trim() || null,
           phone: editPhone.trim() || null,
           bio: editBio.trim() || null,
           avatar_url: avatarUrlToSave || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq("id", user.id);
+        }),
+      });
 
-      if (updateErr) throw updateErr;
+      if (!updateRes.ok) {
+        const err = await updateRes.json();
+        throw new Error(err.error || "Failed to update profile");
+      }
 
       toast.success("Profile updated successfully");
 
@@ -672,7 +580,7 @@ export default function SellerProfile() {
                               variant="destructive"
                               size="icon"
                               className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                              // TODO: Implement delete if needed
+                              // TODO: Implement delete endpoint if needed
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>

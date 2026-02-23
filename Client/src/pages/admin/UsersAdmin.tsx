@@ -1,7 +1,6 @@
 // src/pages/admin/UsersAdmin.tsx
 import { useState, useMemo, useEffect } from "react";
-import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -68,7 +67,7 @@ type User = {
   is_online: boolean;
   rating: number | null;
   banned: boolean | null;
-  evidence_url?: string | null; // optional – if you join from verifications
+  evidence_url?: string | null;
 };
 
 type SortConfig = {
@@ -90,7 +89,6 @@ export default function UsersAdmin() {
     userIds: string[];
   } | null>(null);
 
-  // Evidence review modal
   const [reviewSeller, setReviewSeller] = useState<User | null>(null);
   const [rejectReason, setRejectReason] = useState("");
   const [rejectLoading, setRejectLoading] = useState(false);
@@ -98,65 +96,31 @@ export default function UsersAdmin() {
 
   const pageSize = 10;
 
-  // Fetch all users + join latest pending verification evidence if exists
+  // Fetch users from Flask API (includes evidence_url for pending sellers)
   const { data: users = [], isLoading, error, refetch } = useQuery<User[]>({
     queryKey: ["admin-users"],
     queryFn: async () => {
-      // Get profiles
-      const { data: profiles, error: profileErr } = await supabase
-        .from("profiles")
-        .select("id, full_name, email, role, created_at, is_verified, is_online, rating, banned");
+      const res = await fetch("/api/admin/users", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (profileErr) throw profileErr;
-
-      // Get latest pending verification evidence for each seller (optional join)
-      const sellerIds = profiles.filter(p => p.role === "seller" && !p.is_verified).map(p => p.id);
-      let evidenceMap: Record<string, string | null> = {};
-
-      if (sellerIds.length > 0) {
-        const { data: verifications } = await supabase
-          .from("verifications")
-          .select("seller_id, evidence_url")
-          .in("seller_id", sellerIds)
-          .eq("status", "pending")
-          .order("submitted_at", { ascending: false });
-
-        verifications?.forEach((v: any) => {
-          if (!evidenceMap[v.seller_id]) {
-            evidenceMap[v.seller_id] = v.evidence_url;
-          }
-        });
+      if (!res.ok) {
+        const err = await res.json();
+        toast.error("Failed to load users: " + (err.error || "Unknown error"));
+        throw new Error(err.error || "Failed");
       }
 
-      // Merge evidence_url into user objects
-      return profiles.map((p) => ({
-        ...p,
-        evidence_url: p.role === "seller" && !p.is_verified ? evidenceMap[p.id] || null : null,
-      }));
+      return res.json();
     },
   });
 
-  // Pending sellers: only unverified sellers
   const pendingVerificationsData = useMemo(
     () => users.filter(u => u.role === "seller" && !u.is_verified),
     [users]
   );
 
-  // Real-time subscription
-  useEffect(() => {
-    const channel = supabase
-      .channel("profiles-changes")
-      .on("postgres_changes", { event: "*", schema: "public", table: "profiles" }, () => {
-        queryClient.invalidateQueries({ queryKey: ["admin-users"] });
-      })
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, [queryClient]);
-
-  // Filter & sort users (main table)
   const filteredUsers = useMemo(() => {
     let result = [...users];
 
@@ -209,9 +173,6 @@ export default function UsersAdmin() {
   const buyers = useMemo(() => filteredUsers.filter(u => u.role === "buyer"), [filteredUsers]);
   const sellers = useMemo(() => filteredUsers.filter(u => u.role === "seller"), [filteredUsers]);
 
-  // ────────────────────────────────────────────────
-  // Handlers
-  // ────────────────────────────────────────────────
   const handleSort = (key: keyof User) => {
     setSortConfig((prev) => ({
       key,
@@ -233,6 +194,31 @@ export default function UsersAdmin() {
     }
   };
 
+  const bulkUpdateMutation = useMutation({
+    mutationFn: async ({ action, userIds }: { action: string; userIds: string[] }) => {
+      const res = await fetch("/api/admin/users/bulk", {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ action, userIds }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Bulk action failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success("Bulk action completed");
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      setSelectedUsers([]);
+    },
+    onError: (err: any) => toast.error(err.message || "Bulk action failed"),
+  });
+
   const handleBulkAction = (action: "ban" | "unban" | "verify" | "unverify") => {
     if (selectedUsers.length === 0) {
       toast.warning("No users selected");
@@ -241,97 +227,42 @@ export default function UsersAdmin() {
     setConfirmAction({ type: action, userIds: selectedUsers });
   };
 
-  const executeBulkAction = async () => {
+  const executeBulkAction = () => {
     if (!confirmAction) return;
-
-    const { type, userIds } = confirmAction;
+    bulkUpdateMutation.mutate({ action: confirmAction.type, userIds: confirmAction.userIds });
     setConfirmAction(null);
-
-    const updateData: Partial<User> = {};
-
-    if (type === "ban") updateData.banned = true;
-    if (type === "unban") updateData.banned = false;
-    if (type === "verify") updateData.is_verified = true;
-    if (type === "unverify") updateData.is_verified = false;
-
-    try {
-      const { error } = await supabase
-        .from("profiles")
-        .update(updateData)
-        .in("id", userIds);
-
-      if (error) throw error;
-
-      toast.success(`${userIds.length} users ${type}d successfully`);
-      refetch();
-      setSelectedUsers([]);
-    } catch (err: any) {
-      toast.error(`Bulk action failed: ${err.message}`);
-    }
   };
+
+  const singleUpdateMutation = useMutation({
+    mutationFn: async ({ userId, action }: { userId: string; action: string }) => {
+      const res = await fetch(`/api/admin/users/${userId}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ action }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Action failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success("User updated");
+      queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+    },
+    onError: (err: any) => toast.error(err.message || "Update failed"),
+  });
 
   const handleSingleAction = (userId: string, action: "ban" | "unban" | "verify" | "unverify") => {
-    setConfirmAction({ type: action, userIds: [userId] });
+    singleUpdateMutation.mutate({ userId, action });
   };
 
-  const verifySeller = async (userId: string) => {
-    try {
-      const { error } = await supabase
-        .from("profiles")
-        .update({ is_verified: true })
-        .eq("id", userId)
-        .eq("role", "seller");
-
-      if (error) throw error;
-
-      toast.success("Seller verified successfully");
-      navigate("/admin/verifications");
-    } catch (err: any) {
-      toast.error("Failed to verify seller: " + err.message);
-    }
-  };
-
-  const approveSeller = async () => {
-    if (!reviewSeller) return;
-
-    setApproveLoading(true);
-    try {
-      const { error } = await supabase
-        .from("profiles")
-        .update({ is_verified: true })
-        .eq("id", reviewSeller.id)
-        .eq("role", "seller");
-
-      if (error) throw error;
-
-      toast.success("Seller approved and verified");
-      setReviewSeller(null);
-      navigate("/admin/verifications");
-    } catch (err: any) {
-      toast.error("Approval failed: " + err.message);
-    } finally {
-      setApproveLoading(false);
-    }
-  };
-
-  const rejectSeller = async () => {
-    if (!reviewSeller) return;
-    if (!rejectReason.trim()) {
-      toast.error("Please provide a rejection reason");
-      return;
-    }
-
-    setRejectLoading(true);
-    try {
-      // Optional: you can log rejection reason somewhere if you have a column
-      toast.success("Seller rejected");
-      setReviewSeller(null);
-      setRejectReason("");
-    } catch (err: any) {
-      toast.error("Rejection failed: " + err.message);
-    } finally {
-      setRejectLoading(false);
-    }
+  const verifySeller = (userId: string) => {
+    handleSingleAction(userId, "verify");
   };
 
   const viewProfile = (user: User) => {
@@ -347,11 +278,12 @@ export default function UsersAdmin() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
-        <div className="max-w-7xl mx-auto">
-          <Skeleton className="h-12 w-64 mb-8" />
-          <Skeleton className="h-10 w-full mb-4" />
-          <Skeleton className="h-96 w-full" />
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+        <div className="max-w-7xl mx-auto space-y-8">
+          <Skeleton className="h-12 w-64" />
+          <div className="h-[500px] w-full">
+            <Skeleton className="h-full w-full" />
+          </div>
         </div>
       </div>
     );
@@ -359,7 +291,7 @@ export default function UsersAdmin() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white md:ml-64">
         <div className="text-center">
           <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-500" />
           <h2 className="text-2xl font-bold mb-2">Error Loading Users</h2>
@@ -371,7 +303,7 @@ export default function UsersAdmin() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -419,7 +351,7 @@ export default function UsersAdmin() {
           </div>
         </div>
 
-        {/* Pending Verifications – only unverified sellers */}
+        {/* Pending Verifications */}
         <Card className="bg-slate-900/70 border-slate-700">
           <CardHeader className="pb-3">
             <CardTitle className="text-white flex items-center gap-2">
@@ -698,7 +630,14 @@ export default function UsersAdmin() {
                     <h3 className="font-medium mb-1">Actions</h3>
                     <div className="flex gap-3">
                       <Button
-                        onClick={approveSeller}
+                        onClick={() => {
+                          setApproveLoading(true);
+                          handleSingleAction(reviewSeller.id, "verify");
+                          setTimeout(() => {
+                            setApproveLoading(false);
+                            setReviewSeller(null);
+                          }, 800);
+                        }}
                         disabled={approveLoading}
                         className="flex-1"
                       >
@@ -706,7 +645,16 @@ export default function UsersAdmin() {
                       </Button>
                       <Button
                         variant="destructive"
-                        onClick={rejectSeller}
+                        onClick={() => {
+                          setRejectLoading(true);
+                          // Optional: log reject reason if you add backend support later
+                          setTimeout(() => {
+                            setRejectLoading(false);
+                            setReviewSeller(null);
+                            setRejectReason("");
+                            toast.success("Seller rejected");
+                          }, 800);
+                        }}
                         disabled={rejectLoading}
                         className="flex-1"
                       >

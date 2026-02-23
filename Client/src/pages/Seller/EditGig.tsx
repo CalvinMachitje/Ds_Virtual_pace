@@ -18,7 +18,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Loader2, Upload, X, ArrowLeft, AlertCircle } from "lucide-react";
@@ -28,15 +27,8 @@ import Skeleton from "react-loading-skeleton";
 const gigSchema = z.object({
   title: z.string().min(8, "Title must be at least 8 characters").max(80),
   category: z.enum([
-    "admin_support",
-    "call_handling",
-    "email_management",
-    "scheduling",
-    "data_entry",
-    "customer_support",
-    "social_media",
-    "web_research",
-    "other",
+    "admin_support", "call_handling", "email_management", "scheduling", "data_entry",
+    "customer_support", "social_media", "web_research", "other"
   ]),
   description: z.string().min(120, "Description must be at least 120 characters").max(5000),
   price: z.number().min(50, "Price must be at least R50").max(2000),
@@ -64,22 +56,23 @@ export default function EditGig() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Fetch existing gig
-  const { data: gig, isLoading: isGigLoading } = useQuery<ExistingGig>({
+  const { data: gig, isLoading: isGigLoading, error: gigError } = useQuery<ExistingGig>({
     queryKey: ["gig", id],
     queryFn: async () => {
       if (!id) throw new Error("No gig ID");
 
-      const { data, error } = await supabase
-        .from("gigs")
-        .select("*")
-        .eq("id", id)
-        .eq("seller_id", user!.id)
-        .maybeSingle();
+      const res = await fetch(`/api/seller/gigs/${id}`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) throw error;
-      if (!data) throw new Error("Gig not found or you don't own it");
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Gig not found or you don't own it");
+      }
 
-      return data;
+      return res.json();
     },
     enabled: !!id && !!user?.id,
   });
@@ -115,19 +108,21 @@ export default function EditGig() {
     mutationFn: async (data: GigForm) => {
       if (!user || !id) throw new Error("Not authenticated or no gig ID");
 
-      const { error } = await supabase
-        .from("gigs")
-        .update({
-          title: data.title,
-          description: data.description,
-          price: data.price,
-          category: data.category,
-          image_url: data.image_url || [],
-        })
-        .eq("id", id)
-        .eq("seller_id", user.id);
+      const res = await fetch(`/api/seller/gigs/${id}`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify(data),
+      });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to update gig");
+      }
+
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["gig", id] });
@@ -147,7 +142,7 @@ export default function EditGig() {
   const galleryUrls = watch("image_url") || [];
 
   const handleFiles = async (files: FileList | null) => {
-    if (!files || !user) return;
+    if (!files) return;
 
     const validFiles = Array.from(files).filter(
       (f) => f.type.startsWith("image/") && f.size <= 5 * 1024 * 1024
@@ -158,51 +153,45 @@ export default function EditGig() {
       return;
     }
 
-    const tempIds = validFiles.map((f) => `${f.name}-${Date.now()}`);
-    setUploadingFiles((prev) => [...prev, ...tempIds]);
+    const formData = new FormData();
+    validFiles.forEach(file => formData.append("images", file));
 
-    const newUrls: string[] = [];
-    const newPreviewsList: string[] = [];
+    const tempIds = validFiles.map(f => f.name);
+    setUploadingFiles(tempIds);
 
-    for (let i = 0; i < validFiles.length; i++) {
-      const file = validFiles[i];
-      const tempId = tempIds[i];
+    try {
+      const res = await fetch("/api/seller/gig-images", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: formData,
+      });
 
-      try {
-        const preview = URL.createObjectURL(file);
-        newPreviewsList.push(preview);
-
-        const ext = file.name.split(".").pop() || "jpg";
-        const fileName = `${Date.now()}.${ext}`;
-        const filePath = `${user.id}/gigs/${fileName}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from("gig-gallery")
-          .upload(filePath, file, { upsert: true });
-
-        if (uploadError) throw uploadError;
-
-        const { data: urlData } = supabase.storage
-          .from("gig-gallery")
-          .getPublicUrl(filePath);
-
-        if (urlData.publicUrl) newUrls.push(urlData.publicUrl);
-
-        setUploadProgress((prev) => ({ ...prev, [tempId]: 100 }));
-      } catch (err: any) {
-        toast.error(`Upload failed for ${file.name}`);
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Image upload failed");
       }
-    }
 
-    setValue("image_url", [...galleryUrls, ...newUrls], { shouldValidate: true });
-    setPreviews((prev) => [...prev, ...newPreviewsList]);
-    setUploadingFiles((prev) => prev.filter((id) => !tempIds.includes(id)));
+      const { urls } = await res.json();
+
+      const newPreviews = validFiles.map(file => URL.createObjectURL(file));
+      setPreviews(prev => [...prev, ...newPreviews]);
+
+      setValue("image_url", [...galleryUrls, ...urls], { shouldValidate: true });
+
+      toast.success(`${urls.length} image(s) uploaded successfully`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to upload images");
+    } finally {
+      setUploadingFiles([]);
+    }
   };
 
   const removeImage = (index: number) => {
     const updated = galleryUrls.filter((_, i) => i !== index);
     setValue("image_url", updated);
-    setPreviews((prev) => {
+    setPreviews(prev => {
       URL.revokeObjectURL(prev[index]);
       return prev.filter((_, i) => i !== index);
     });
@@ -219,7 +208,7 @@ export default function EditGig() {
     );
   }
 
-  if (!gig) {
+  if (gigError || !gig) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
         <AlertCircle className="h-12 w-12 mb-4" />

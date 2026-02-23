@@ -16,7 +16,6 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useMutation, useQueryClient } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
@@ -28,23 +27,11 @@ import { cn } from "@/lib/utils";
 const gigSchema = z.object({
   title: z.string().min(8, "Title must be at least 8 characters").max(80),
   category: z.enum([
-    "admin_support",
-    "call_handling",
-    "email_management",
-    "scheduling",
-    "data_entry",
-    "customer_support",
-    "social_media",
-    "web_research",
-    "other",
-    "Graphics & Design",
-    "Programming & Tech",
-    "Video & Animation",
-    "Writing & Translation",
-    "Digital Marketing",
-    "Music & Audio",
-    "Photography",
-    "Business"
+    "admin_support", "call_handling", "email_management", "scheduling", "data_entry",
+    "customer_support", "social_media", "web_research", "other",
+    "Graphics & Design", "Programming & Tech", "Video & Animation",
+    "Writing & Translation", "Digital Marketing", "Music & Audio",
+    "Photography", "Business"
   ]),
   description: z.string().min(120, "Description must be at least 120 characters").max(5000),
   price: z.number().min(50, "Price must be at least R50").max(2000),
@@ -53,7 +40,6 @@ const gigSchema = z.object({
 
 type GigForm = z.infer<typeof gigSchema>;
 
-// ── Component ─────────────────────────────────────────────
 export default function CreateGig() {
   const { user, userRole } = useAuth();
   const queryClient = useQueryClient();
@@ -64,21 +50,25 @@ export default function CreateGig() {
     if (userRole !== "seller" || !user?.id) return;
 
     const checkVerification = async () => {
-      const { data, error } = await supabase
-        .from("profiles")
-        .select("is_verified")
-        .eq("id", user.id)
-        .single();
+      try {
+        const res = await fetch("/api/profile/me", {
+          headers: {
+            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+          },
+        });
 
-      if (error) {
-        console.error("Verification check failed:", error);
+        if (!res.ok) {
+          const err = await res.json();
+          throw new Error(err.error || "Verification check failed");
+        }
+
+        const profile = await res.json();
+        if (!profile.is_verified) {
+          toast.error("You must be verified before creating gigs. Please wait for admin approval.");
+          navigate("/seller-profile");
+        }
+      } catch (err: any) {
         toast.error("Could not verify your account status");
-        navigate("/seller-profile");
-        return;
-      }
-
-      if (!data?.is_verified) {
-        toast.error("You must be verified before creating gigs. Please wait for admin approval.");
         navigate("/seller-profile");
       }
     };
@@ -109,19 +99,21 @@ export default function CreateGig() {
     mutationFn: async (data: GigForm) => {
       if (!user) throw new Error("Not authenticated");
 
-      const { error } = await supabase
-        .from("gigs")
-        .insert({
-          seller_id: user.id,
-          title: data.title,
-          description: data.description,
-          price: data.price,
-          category: data.category,
-          gallery_urls: data.gallery_urls || [], // array of public URLs
-          status: "published",
-        });
+      const res = await fetch("/api/seller/gigs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify(data),
+      });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to create gig");
+      }
+
+      return res.json();
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["gigs"] });
@@ -144,7 +136,7 @@ export default function CreateGig() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const handleFiles = async (files: FileList | null) => {
-    if (!files || !user) return;
+    if (!files) return;
 
     const validFiles = Array.from(files).filter(
       (f) => f.type.startsWith("image/") && f.size <= 5 * 1024 * 1024
@@ -155,55 +147,41 @@ export default function CreateGig() {
       return;
     }
 
-    const tempIds = validFiles.map((f) => `${f.name}-${Date.now()}`);
-    setUploadingFiles((prev) => [...prev, ...tempIds]);
+    const formData = new FormData();
+    validFiles.forEach(file => formData.append("images", file));
 
-    const newUrls: string[] = [];
-    const newPreviewsList: string[] = [];
+    const tempIds = validFiles.map(f => f.name);
+    setUploadingFiles(tempIds);
 
-    for (let i = 0; i < validFiles.length; i++) {
-      const file = validFiles[i];
-      const tempId = tempIds[i];
+    try {
+      const res = await fetch("/api/seller/gig-images", {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: formData,
+      });
 
-      try {
-        // Preview
-        const preview = URL.createObjectURL(file);
-        newPreviewsList.push(preview);
-
-        // Upload to Supabase Storage
-        const ext = file.name.split(".").pop() || "jpg";
-        const fileName = `${Date.now()}.${ext}`;
-        const filePath = `${user.id}/${fileName}`;
-
-        const { error: uploadError } = await supabase.storage
-          .from("gig-gallery")
-          .upload(filePath, file, {
-            cacheControl: "3600",
-            upsert: false,
-          });
-
-        if (uploadError) throw uploadError;
-
-        // Get public URL
-        const { data: urlData } = supabase.storage
-          .from("gig-gallery")
-          .getPublicUrl(filePath);
-
-        if (urlData.publicUrl) {
-          newUrls.push(urlData.publicUrl);
-        }
-
-        setUploadProgress((prev) => ({ ...prev, [tempId]: 100 }));
-      } catch (err: any) {
-        toast.error(`Upload failed for ${file.name}`);
-        setUploadProgress((prev) => ({ ...prev, [tempId]: -1 }));
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Image upload failed");
       }
-    }
 
-    // Update form field
-    setValue("gallery_urls", [...galleryUrls, ...newUrls], { shouldValidate: true });
-    setPreviews((prev) => [...prev, ...newPreviewsList]);
-    setUploadingFiles((prev) => prev.filter((id) => !tempIds.includes(id)));
+      const { urls } = await res.json();
+
+      // Generate local previews
+      const newPreviews = validFiles.map(file => URL.createObjectURL(file));
+      setPreviews(prev => [...prev, ...newPreviews]);
+
+      // Update form field with returned URLs
+      setValue("gallery_urls", [...galleryUrls, ...urls], { shouldValidate: true });
+
+      toast.success(`${urls.length} image(s) uploaded successfully`);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to upload images");
+    } finally {
+      setUploadingFiles([]);
+    }
   };
 
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -220,14 +198,14 @@ export default function CreateGig() {
   const removeImage = (index: number) => {
     const updated = galleryUrls.filter((_, i) => i !== index);
     setValue("gallery_urls", updated);
-    setPreviews((prev) => {
+    setPreviews(prev => {
       URL.revokeObjectURL(prev[index]);
       return prev.filter((_, i) => i !== index);
     });
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24 md:ml-64">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-8">
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>
@@ -259,7 +237,7 @@ export default function CreateGig() {
                   {errors.title ? (
                     <p className="text-red-400">{errors.title.message}</p>
                   ) : (
-                    <span>{watch("title")?.length || 0}/80</span>
+                    <span>{titleLength}/80</span>
                   )}
                 </div>
               </div>
@@ -308,7 +286,7 @@ export default function CreateGig() {
                   {errors.description ? (
                     <p className="text-red-400">{errors.description.message}</p>
                   ) : (
-                    <span>{watch("description")?.length || 0}/5000</span>
+                    <span>{descLength}/5000</span>
                   )}
                 </div>
               </div>
@@ -383,16 +361,16 @@ export default function CreateGig() {
 
                 {uploadingFiles.length > 0 && (
                   <div className="space-y-3 mt-4">
-                    {uploadingFiles.map((id) => (
-                      <div key={id} className="space-y-1">
+                    {uploadingFiles.map((name) => (
+                      <div key={name} className="space-y-1">
                         <div className="flex justify-between text-xs text-slate-400">
-                          <span>Uploading...</span>
-                          <span>{uploadProgress[id] ?? 0}%</span>
+                          <span>Uploading {name}...</span>
+                          <span>{uploadProgress[name] ?? 0}%</span>
                         </div>
                         <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
                           <div
                             className="h-full bg-blue-600 transition-all duration-300"
-                            style={{ width: `${uploadProgress[id] ?? 0}%` }}
+                            style={{ width: `${uploadProgress[name] ?? 0}%` }}
                           />
                         </div>
                       </div>

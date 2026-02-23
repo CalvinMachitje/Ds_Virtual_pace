@@ -1,110 +1,178 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/admin/VerificationsAdmin.tsx
-import { useQuery } from "@tanstack/react-query";
-import { supabase } from "@/lib/supabase";
+import { useState } from "react";
+import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { Textarea } from "@/components/ui/textarea";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
+import { Loader2, AlertCircle, CheckCircle, XCircle } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
-import { useNavigate } from "react-router-dom";
+import "react-loading-skeleton/dist/skeleton.css";
+import { formatDistanceToNow } from "date-fns";
 
 type Verification = {
   id: string;
   seller_id: string;
-  type: "identity" | "background" | "skills" | string;
+  type: string;
   status: "pending" | "approved" | "rejected";
   submitted_at: string;
-  evidence_url?: string | null;
+  evidence_urls?: string[] | null; // updated to array
   full_name?: string | null;
   email?: string | null;
 };
 
 export default function VerificationsAdmin() {
-  const navigate = useNavigate();
+  const queryClient = useQueryClient();
 
-  const { data: verifications = [], isLoading, refetch } = useQuery<Verification[]>({
+  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [rejectOpen, setRejectOpen] = useState(false);
+  const [selectedVer, setSelectedVer] = useState<Verification | null>(null);
+  const [rejectReason, setRejectReason] = useState("");
+
+  const { data: verifications = [], isLoading, error, refetch } = useQuery<Verification[]>({
     queryKey: ["admin-verifications"],
     queryFn: async () => {
-      const { data, error } = await supabase
-        .from("verifications")
-        .select(`
-          id,
-          seller_id,
-          type,
-          status,
-          submitted_at,
-          evidence_url,
-          profiles!seller_id (full_name, email)
-        `)
-        .eq("status", "pending")
-        .order("submitted_at", { ascending: false });
+      const res = await fetch("/api/admin/verifications", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) {
-        toast.error("Failed to load verifications: " + error.message);
-        throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load verifications");
       }
 
-      return (data || []).map((v: any) => ({
-        ...v,
-        full_name: v.profiles?.full_name || null,
-        email: v.profiles?.email || null,
-      }));
+      return res.json();
     },
   });
 
-  const handleApprove = async (verId: string, sellerId: string) => {
-    try {
-      // 1. Approve verification record
-      const { error: verError } = await supabase
-        .from("verifications")
-        .update({ status: "approved" })
-        .eq("id", verId);
+  const approveMutation = useMutation({
+    mutationFn: async ({ verId, sellerId }: { verId: string; sellerId: string }) => {
+      const res = await fetch(`/api/admin/verifications/${verId}/approve`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ seller_id: sellerId }),
+      });
 
-      if (verError) throw verError;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Approval failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success("Verification approved successfully");
+      queryClient.invalidateQueries({ queryKey: ["admin-verifications"] });
+      setConfirmOpen(false);
+      setSelectedVer(null);
+    },
+    onError: (err: any) => {
+      toast.error(err.message || "Failed to approve verification");
+    },
+  });
 
-      // 2. Mark seller as verified in profiles
-      const { error: profileError } = await supabase
-        .from("profiles")
-        .update({ is_verified: true })
-        .eq("id", sellerId);
+  const rejectMutation = useMutation({
+    mutationFn: async ({ verId, reason }: { verId: string; reason: string }) => {
+      const res = await fetch(`/api/admin/verifications/${verId}/reject`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ rejection_reason: reason.trim() || undefined }),
+      });
 
-      if (profileError) throw profileError;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Rejection failed");
+      }
+      return res.json();
+    },
+    onSuccess: () => {
+      toast.success("Verification rejected");
+      queryClient.invalidateQueries({ queryKey: ["admin-verifications"] });
+      setRejectOpen(false);
+      setRejectReason("");
+      setSelectedVer(null);
+    },
+    onError: (err: any) => {
+      toast.error(err.message || "Failed to reject verification");
+    },
+  });
 
-      toast.success("Verification approved");
-      refetch();
-    } catch (err: any) {
-      toast.error("Failed to approve verification: " + err.message);
-    }
+  const handleApproveClick = (ver: Verification) => {
+    setSelectedVer(ver);
+    setConfirmOpen(true);
   };
 
-  const handleReject = async (verId: string) => {
-    try {
-      const { error } = await supabase
-        .from("verifications")
-        .update({ status: "rejected" })
-        .eq("id", verId);
+  const handleRejectClick = (ver: Verification) => {
+    setSelectedVer(ver);
+    setRejectOpen(true);
+    setRejectReason("");
+  };
 
-      if (error) throw error;
+  const confirmApprove = () => {
+    if (!selectedVer) return;
+    approveMutation.mutate({ verId: selectedVer.id, sellerId: selectedVer.seller_id });
+  };
 
-      toast.success("Verification rejected");
-      refetch();
-    } catch (err: any) {
-      toast.error("Failed to reject verification: " + err.message);
+  const confirmReject = () => {
+    if (!selectedVer) return;
+    if (rejectReason.trim().length < 10) {
+      toast.error("Please provide a rejection reason (min 10 characters)");
+      return;
     }
+    rejectMutation.mutate({ verId: selectedVer.id, reason: rejectReason });
   };
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
         <div className="max-w-6xl mx-auto">
-          <Skeleton height={500} />
+          <h1 className="text-3xl font-bold text-white mb-8">Manage Verifications</h1>
+          <Card className="bg-slate-900/70 border-slate-700">
+            <CardHeader>
+              <CardTitle className="text-white">Pending Verifications</CardTitle>
+            </CardHeader>
+            <CardContent>
+              <Skeleton height={400} />
+            </CardContent>
+          </Card>
         </div>
       </div>
     );
   }
 
+  if (error) {
+    return (
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-red-400 p-6 md:ml-64">
+        <AlertCircle className="h-16 w-16 mb-4" />
+        <h2 className="text-2xl font-bold mb-2">Failed to load verifications</h2>
+        <p className="text-slate-400 mb-6">{(error as Error).message}</p>
+        <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
+          Retry
+        </Button>
+      </div>
+    );
+  }
+
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Manage Verifications</h1>
 
@@ -136,23 +204,30 @@ export default function VerificationsAdmin() {
                         <TableCell className="text-white font-medium">
                           {v.full_name || "Unnamed Seller"}
                         </TableCell>
-                        <TableCell className="text-slate-300">{v.email || v.seller_id}</TableCell>
-                        <TableCell className="text-slate-300">{v.type}</TableCell>
+                        <TableCell className="text-slate-300 break-all">
+                          {v.email || v.seller_id.substring(0, 8) + "..."}
+                        </TableCell>
+                        <TableCell className="text-slate-300 capitalize">{v.type}</TableCell>
                         <TableCell className="text-slate-300">
-                          {new Date(v.submitted_at).toLocaleDateString()}
+                          {formatDistanceToNow(new Date(v.submitted_at), { addSuffix: true })}
                         </TableCell>
                         <TableCell className="text-slate-300">
-                          {v.evidence_url ? (
-                            <a
-                              href={v.evidence_url}
-                              target="_blank"
-                              rel="noopener noreferrer"
-                              className="text-blue-400 hover:underline"
-                            >
-                              View Evidence
-                            </a>
+                          {v.evidence_urls && v.evidence_urls.length > 0 ? (
+                            <div className="flex flex-wrap gap-2">
+                              {v.evidence_urls.map((url, idx) => (
+                                <a
+                                  key={idx}
+                                  href={url}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="text-blue-400 hover:underline text-sm"
+                                >
+                                  Evidence {idx + 1}
+                                </a>
+                              ))}
+                            </div>
                           ) : (
-                            "No evidence"
+                            "No evidence uploaded"
                           )}
                         </TableCell>
                         <TableCell>
@@ -160,15 +235,28 @@ export default function VerificationsAdmin() {
                             <Button
                               variant="default"
                               size="sm"
-                              onClick={() => handleApprove(v.id, v.seller_id)}
+                              onClick={() => handleApproveClick(v)}
+                              disabled={approveMutation.isPending}
+                              className="bg-green-600 hover:bg-green-700"
                             >
+                              {approveMutation.isPending && selectedVer?.id === v.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                              ) : (
+                                <CheckCircle className="h-4 w-4 mr-2" />
+                              )}
                               Approve
                             </Button>
                             <Button
                               variant="destructive"
                               size="sm"
-                              onClick={() => handleReject(v.id)}
+                              onClick={() => handleRejectClick(v)}
+                              disabled={rejectMutation.isPending}
                             >
+                              {rejectMutation.isPending && selectedVer?.id === v.id ? (
+                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                              ) : (
+                                <XCircle className="h-4 w-4 mr-2" />
+                              )}
                               Reject
                             </Button>
                           </div>
@@ -181,6 +269,76 @@ export default function VerificationsAdmin() {
             )}
           </CardContent>
         </Card>
+
+        {/* Confirm Approve Dialog */}
+        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Approve Verification?</DialogTitle>
+              <DialogDescription>
+                This will mark the seller as verified and approve their application.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                onClick={confirmApprove}
+                disabled={approveMutation.isPending}
+                className="bg-green-600 hover:bg-green-700"
+              >
+                {approveMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Approving...
+                  </>
+                ) : (
+                  "Confirm Approve"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
+
+        {/* Reject with Reason Dialog */}
+        <Dialog open={rejectOpen} onOpenChange={setRejectOpen}>
+          <DialogContent>
+            <DialogHeader>
+              <DialogTitle>Reject Verification</DialogTitle>
+              <DialogDescription>
+                Provide a reason for rejection (minimum 10 characters).
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-4 py-4">
+              <Textarea
+                placeholder="Enter rejection reason..."
+                value={rejectReason}
+                onChange={(e) => setRejectReason(e.target.value)}
+                className="min-h-[100px]"
+              />
+            </div>
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setRejectOpen(false)}>
+                Cancel
+              </Button>
+              <Button
+                variant="destructive"
+                onClick={confirmReject}
+                disabled={rejectMutation.isPending || rejectReason.trim().length < 10}
+              >
+                {rejectMutation.isPending ? (
+                  <>
+                    <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                    Rejecting...
+                  </>
+                ) : (
+                  "Confirm Reject"
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </div>
   );

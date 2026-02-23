@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Calendar, Clock, DollarSign, CreditCard, ShieldCheck, Star } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
-import { supabase } from "@/lib/supabase";
+import { toast } from "sonner";
 
 type Booking = {
   id: string;
@@ -25,29 +25,33 @@ type Booking = {
   avatar_url?: string;
 };
 
-const fetchReviewBooking = async (id: string) => {
-  const { data, error } = await supabase
-    .from("bookings")
-    .select("id, seller_name, role, service, start_time, duration, price, fee, taxes, total, payment_method, avatar_url")
-    .eq("id", id)
-    .maybeSingle();
-
-  if (error) throw error;
-  return data as Booking;
-};
-
 export default function ReviewBooking() {
   const { id } = useParams<{ id: string }>();
 
   const { data: booking, isLoading, error, refetch } = useQuery<Booking>({
     queryKey: ["review-booking", id],
-    queryFn: () => fetchReviewBooking(id || ""),
+    queryFn: async () => {
+      if (!id) throw new Error("No booking ID");
+
+      const res = await fetch(`/api/bookings/${id}/review`, {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Booking not found");
+      }
+
+      return res.json();
+    },
     enabled: !!id,
   });
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
         <p className="text-xl mb-4">Failed to load booking</p>
         <p className="text-slate-400 mb-6">{(error as Error).message}</p>
         <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
@@ -58,7 +62,7 @@ export default function ReviewBooking() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6 md:ml-64">
       <div className="max-w-2xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-2">Review Booking</h1>
         <p className="text-slate-400 mb-8">Please confirm the details before payment</p>
@@ -91,7 +95,7 @@ export default function ReviewBooking() {
                     <p className="text-slate-300">{booking.role}</p>
                     <div className="flex items-center gap-2 mt-1">
                       <Badge className="bg-blue-600">{booking.service}</Badge>
-                      <span className="text-slate-400">• ${booking.price.toFixed(2)}/hr</span>
+                      <span className="text-slate-400">• R{booking.price.toFixed(2)}/hr</span>
                     </div>
                   </div>
                   <div className="ml-auto text-right">
@@ -116,7 +120,7 @@ export default function ReviewBooking() {
                       <Calendar className="h-5 w-5 text-blue-400" />
                       <div>
                         <p className="text-slate-400 text-sm">Date & Time</p>
-                        <p className="text-white">{booking.start_time}</p>
+                        <p className="text-white">{new Date(booking.start_time).toLocaleString()}</p>
                       </div>
                     </div>
 
@@ -134,7 +138,9 @@ export default function ReviewBooking() {
                       <DollarSign className="h-5 w-5 text-green-400" />
                       <div>
                         <p className="text-slate-400 text-sm">Rate</p>
-                        <p className="text-white">${booking.price.toFixed(2)}/hr × {booking.duration} hrs = ${(booking.price * booking.duration).toFixed(2)}</p>
+                        <p className="text-white">
+                          R{booking.price.toFixed(2)}/hr × {booking.duration} hrs = R{(booking.price * booking.duration).toFixed(2)}
+                        </p>
                       </div>
                     </div>
 
@@ -142,7 +148,7 @@ export default function ReviewBooking() {
                       <CreditCard className="h-5 w-5 text-purple-400" />
                       <div>
                         <p className="text-slate-400 text-sm">Service Fee + Taxes</p>
-                        <p className="text-white">${(booking.fee + booking.taxes).toFixed(2)}</p>
+                        <p className="text-white">R{(booking.fee + booking.taxes).toFixed(2)}</p>
                       </div>
                     </div>
                   </div>
@@ -151,7 +157,7 @@ export default function ReviewBooking() {
                 <div className="border-t border-slate-700 pt-6 mt-6">
                   <div className="flex justify-between items-center text-lg">
                     <span className="text-white font-semibold">Total</span>
-                    <span className="text-2xl font-bold text-green-400">${booking.total.toFixed(2)}</span>
+                    <span className="text-2xl font-bold text-green-400">R{booking.total.toFixed(2)}</span>
                   </div>
                 </div>
               </CardContent>
@@ -183,7 +189,7 @@ export default function ReviewBooking() {
 
             {/* Confirm button */}
             <Button className="w-full bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 py-8 text-xl">
-              Confirm and Pay ${booking.total.toFixed(2)}
+              Confirm and Pay R{booking.total.toFixed(2)}
             </Button>
           </>
         )}

@@ -2,7 +2,6 @@
 // src/pages/Buyer/MyBookings.tsx
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
-import { supabase } from "@/lib/supabase";
 import { useAuth } from "@/context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -39,7 +38,7 @@ type Booking = {
   requirements?: string;
   created_at: string;
   updated_at: string;
-  reviewed: boolean; // true if buyer already left a review for this booking
+  reviewed: boolean;
 };
 
 export default function MyBookings() {
@@ -62,81 +61,33 @@ export default function MyBookings() {
     queryFn: async () => {
       if (!user?.id) throw new Error("Not logged in");
 
-      const { data: rows, error } = await supabase
-        .from("bookings")
-        .select(`
-          id, status, price, requirements, created_at, updated_at,
-          gig:gig_id (id, title, price),
-          seller:seller_id (id, full_name),
-          reviewed:reviews!booking_id (id)  -- subquery to check if review exists
-        `)
-        .eq("buyer_id", user.id)
-        .order("created_at", { ascending: false });
+      const res = await fetch("/api/buyer/bookings", {
+        headers: {
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+      });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to load bookings");
+      }
 
-      const normalized = (rows || []).map((r: any) => ({
-        id: r.id,
-        status: r.status,
-        price: r.price,
-        requirements: r.requirements,
-        created_at: r.created_at,
-        updated_at: r.updated_at,
-        gig: Array.isArray(r.gig) ? r.gig[0] : r.gig,
-        seller: Array.isArray(r.seller) ? r.seller[0] : r.seller,
-        reviewed: !!r.reviewed?.length, // true if any review exists for this booking
-      })) as Booking[];
-
-      return normalized;
+      return res.json();
     },
     enabled: !!user?.id,
   });
 
-  // ────────────────────────────────────────────────
-  // Real-time updates for booking status changes
-  // ────────────────────────────────────────────────
+  // Poll for booking status updates every 30 seconds
   useEffect(() => {
     if (!user?.id) return;
 
-    const channel = supabase
-      .channel(`buyer-bookings:${user.id}`)
-      .on(
-        "postgres_changes",
-        {
-          event: "UPDATE",
-          schema: "public",
-          table: "bookings",
-          filter: `buyer_id=eq.${user.id}`,
-        },
-        (payload) => {
-          const newStatus = payload.new.status;
-          const oldStatus = payload.old.status;
-          const gigTitle = payload.new.gig?.title || "a gig";
+    const interval = setInterval(() => {
+      queryClient.invalidateQueries({ queryKey: ["my-bookings", user.id] });
+    }, 30000);
 
-          if (newStatus !== oldStatus) {
-            if (newStatus === "accepted") {
-              toast.success(`Your booking for "${gigTitle}" was accepted!`);
-            } else if (newStatus === "rejected") {
-              toast.error(`Your booking for "${gigTitle}" was rejected.`);
-            } else if (newStatus === "completed") {
-              toast.info(`Booking "${gigTitle}" marked as completed.`);
-            }
-          }
-
-          // Refresh the list
-          queryClient.invalidateQueries({ queryKey: ["my-bookings", user.id] });
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
+    return () => clearInterval(interval);
   }, [user?.id, queryClient]);
 
-  // ────────────────────────────────────────────────
-  // Cancel booking mutation
-  // ────────────────────────────────────────────────
   const cancelBooking = useMutation({
     mutationFn: async ({ bookingId, reason }: { bookingId: string; reason: string }) => {
       if (!user?.id) throw new Error("Not authenticated");
@@ -145,17 +96,19 @@ export default function MyBookings() {
         throw new Error("Please provide a reason (at least 10 characters)");
       }
 
-      const { error } = await supabase
-        .from("bookings")
-        .update({
-          status: "cancelled",
-          cancel_reason: reason.trim(),
-        })
-        .eq("id", bookingId)
-        .eq("buyer_id", user.id)
-        .eq("status", "pending"); // Only allow cancel if still pending
+      const res = await fetch(`/api/bookings/${bookingId}/cancel`, {
+        method: "PATCH",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to cancel");
+      }
     },
     onSuccess: () => {
       toast.success("Booking cancelled successfully");
@@ -171,24 +124,29 @@ export default function MyBookings() {
     },
   });
 
-  // ────────────────────────────────────────────────
-  // Submit review mutation
-  // ────────────────────────────────────────────────
   const submitReview = useMutation({
     mutationFn: async () => {
       if (!selectedBooking || rating === 0 || !user?.id) {
         throw new Error("Invalid review data");
       }
 
-      const { error } = await supabase.from("reviews").insert({
-        booking_id: selectedBooking.id,
-        reviewer_id: user.id,
-        reviewed_id: selectedBooking.seller.id,
-        rating,
-        comment: comment.trim() || null,
+      const res = await fetch("/api/reviews", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify({
+          booking_id: selectedBooking.id,
+          rating,
+          comment: comment.trim() || null,
+        }),
       });
 
-      if (error) throw error;
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to submit review");
+      }
     },
     onSuccess: () => {
       toast.success("Review submitted! Thank you.");
