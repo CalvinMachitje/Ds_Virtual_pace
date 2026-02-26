@@ -142,7 +142,7 @@ export default function VerificationsAdmin() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
         <div className="max-w-6xl mx-auto">
           <h1 className="text-3xl font-bold text-white mb-8">Manage Verifications</h1>
           <Card className="bg-slate-900/70 border-slate-700">
@@ -160,7 +160,7 @@ export default function VerificationsAdmin() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-red-400 p-6 md:ml-64">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-red-400 p-6">
         <AlertCircle className="h-16 w-16 mb-4" />
         <h2 className="text-2xl font-bold mb-2">Failed to load verifications</h2>
         <p className="text-slate-400 mb-6">{(error as Error).message}</p>
@@ -172,7 +172,7 @@ export default function VerificationsAdmin() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Manage Verifications</h1>
 

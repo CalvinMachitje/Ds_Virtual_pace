@@ -7,25 +7,38 @@ import autoprefixer from 'autoprefixer'
 
 // https://vite.dev/config/
 export default defineConfig({
-  // Server configuration
-  server: {
-    host: true,                    // Allows network access from phone/tablet on same Wi-Fi
-    port: 5173,                    // Default Vite port (change if needed)
-    open: true,                    // Auto-open browser on start (optional)
+  // Load .env from monorepo root (one level up)
+  envDir: path.resolve(__dirname, '..'),   // gig-connect/
 
-    // Proxy backend API calls to Flask during development (prevents CORS)
+  // Only load variables starting with VITE_
+  envPrefix: ['VITE_'],
+
+  server: {
+    host: true,
+    port: 5173,
+    open: true,
+
     proxy: {
+      // Proxy all /api requests to Flask backend on port 5000
       '/api': {
-        target: 'http://localhost:5000',   // Your Flask dev server port
+        target: 'http://localhost:5000',
         changeOrigin: true,
         secure: false,
-        rewrite: (path) => path.replace(/^\/api/, ''),
+        // Do NOT remove /api prefix — Flask expects it
+        rewrite: (path) => path,   // ← key fix: keep /api intact
+      },
+
+      // Proxy WebSocket (Socket.IO) if you use it
+      '/socket.io': {
+        target: 'http://localhost:5000',
+        ws: true,
+        changeOrigin: true,
       },
     },
   },
 
   plugins: [
-    react(),   // Fast React compiler using SWC
+    react(),
   ],
 
   resolve: {
@@ -41,7 +54,7 @@ export default defineConfig({
 
   build: {
     outDir: 'dist',
-    sourcemap: true,             // Helpful for debugging production issues
+    sourcemap: true,
     rollupOptions: {
       output: {
         manualChunks: {
@@ -66,7 +79,7 @@ export default defineConfig({
     },
   },
 
-  // Suppress harmless warnings
+  // Suppress some noisy warnings
   esbuild: {
     logOverride: {
       'this-is-undefined-in-esm': 'silent',

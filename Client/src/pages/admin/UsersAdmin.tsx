@@ -96,30 +96,35 @@ export default function UsersAdmin() {
 
   const pageSize = 10;
 
-  // Fetch users from Flask API (includes evidence_url for pending sellers)
-  const { data: users = [], isLoading, error, refetch } = useQuery<User[]>({
-    queryKey: ["admin-users"],
-    queryFn: async () => {
-      const res = await fetch("/api/admin/users", {
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
-        },
-      });
+  // Fetch users from Flask API
+const { data: response = {}, isLoading, error, refetch } = useQuery<any>({
+  queryKey: ["admin-users"],
+  queryFn: async () => {
+    const token = localStorage.getItem("access_token");
+    if (!token) throw new Error("No auth token");
 
-      if (!res.ok) {
-        const err = await res.json();
-        toast.error("Failed to load users: " + (err.error || "Unknown error"));
-        throw new Error(err.error || "Failed");
-      }
+    const res = await fetch("/api/admin/users", {
+      headers: { Authorization: `Bearer ${token}` },
+    });
 
-      return res.json();
-    },
-  });
+    if (!res.ok) {
+      const err = await res.json().catch(() => ({}));
+      throw new Error(err.error || "Failed");
+    }
 
-  const pendingVerificationsData = useMemo(
-    () => users.filter(u => u.role === "seller" && !u.is_verified),
-    [users]
-  );
+    return res.json();
+  },
+  retry: 1,
+});
+
+// Extract users array from response
+const users: User[] = response.users || [];
+
+// Now use users as before
+const pendingVerifications = useMemo(
+  () => users.filter(u => u.role === "seller" && !u.is_verified),
+  [users]
+);
 
   const filteredUsers = useMemo(() => {
     let result = [...users];
@@ -128,9 +133,9 @@ export default function UsersAdmin() {
       const term = searchTerm.toLowerCase();
       result = result.filter(
         (u) =>
-          u.full_name?.toLowerCase().includes(term) ||
-          u.email.toLowerCase().includes(term) ||
-          u.id.toLowerCase().includes(term)
+          (u.full_name?.toLowerCase().includes(term) ||
+           u.email.toLowerCase().includes(term) ||
+           u.id.toLowerCase().includes(term))
       );
     }
 
@@ -143,8 +148,8 @@ export default function UsersAdmin() {
         const aVal = a[sortConfig.key];
         const bVal = b[sortConfig.key];
 
-        if (aVal === null || aVal === undefined) return 1;
-        if (bVal === null || bVal === undefined) return -1;
+        if (aVal == null) return 1;
+        if (bVal == null) return -1;
 
         if (typeof aVal === "string" && typeof bVal === "string") {
           return sortConfig.direction === "asc"
@@ -206,13 +211,13 @@ export default function UsersAdmin() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Bulk action failed");
       }
       return res.json();
     },
     onSuccess: () => {
-      toast.success("Bulk action completed");
+      toast.success("Bulk action completed successfully");
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       setSelectedUsers([]);
     },
@@ -245,13 +250,13 @@ export default function UsersAdmin() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Action failed");
       }
       return res.json();
     },
     onSuccess: () => {
-      toast.success("User updated");
+      toast.success("User updated successfully");
       queryClient.invalidateQueries({ queryKey: ["admin-users"] });
     },
     onError: (err: any) => toast.error(err.message || "Update failed"),
@@ -276,26 +281,13 @@ export default function UsersAdmin() {
     navigate(profilePath);
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
-        <div className="max-w-7xl mx-auto space-y-8">
-          <Skeleton className="h-12 w-64" />
-          <div className="h-[500px] w-full">
-            <Skeleton className="h-full w-full" />
-          </div>
-        </div>
-      </div>
-    );
-  }
-
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white md:ml-64">
-        <div className="text-center">
-          <AlertCircle className="h-16 w-16 mx-auto mb-4 text-red-500" />
-          <h2 className="text-2xl font-bold mb-2">Error Loading Users</h2>
-          <p className="text-slate-400 mb-6">{(error as Error).message}</p>
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white">
+        <div className="text-center space-y-4">
+          <AlertCircle className="h-16 w-16 mx-auto text-red-500" />
+          <h2 className="text-2xl font-bold">Error Loading Users</h2>
+          <p className="text-slate-400">{(error as Error).message}</p>
           <Button onClick={() => refetch()}>Retry</Button>
         </div>
       </div>
@@ -303,7 +295,7 @@ export default function UsersAdmin() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-750 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -356,11 +348,11 @@ export default function UsersAdmin() {
           <CardHeader className="pb-3">
             <CardTitle className="text-white flex items-center gap-2">
               <AlertCircle className="h-5 w-5 text-yellow-500" />
-              Pending Seller Verifications ({pendingVerificationsData.length})
+              Pending Seller Verifications ({pendingVerifications.length})
             </CardTitle>
           </CardHeader>
           <CardContent>
-            {pendingVerificationsData.length === 0 ? (
+            {pendingVerifications.length === 0 ? (
               <div className="text-center py-12 text-slate-400 border border-dashed border-slate-700 rounded-lg">
                 No sellers awaiting verification.
               </div>
@@ -377,7 +369,7 @@ export default function UsersAdmin() {
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {pendingVerificationsData.map((u) => (
+                    {pendingVerifications.map((u) => (
                       <TableRow key={u.id} className="hover:bg-slate-800/50 transition-colors">
                         <TableCell className="font-medium">{u.full_name || "Unnamed Seller"}</TableCell>
                         <TableCell>{u.email}</TableCell>
@@ -423,102 +415,55 @@ export default function UsersAdmin() {
           </CardContent>
         </Card>
 
-        {/* Buyers Table */}
+        {/* Users Table (combined for simplicity) */}
         <Card className="bg-slate-900/70 border-slate-700">
           <CardHeader>
             <CardTitle className="text-white flex items-center gap-2">
               <Users className="h-5 w-5" />
-              Buyers ({buyers.length})
+              All Users ({filteredUsers.length})
             </CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Registered</TableHead>
-                    <TableHead>Banned</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {buyers.length === 0 ? (
+            {filteredUsers.length === 0 ? (
+              <div className="text-center py-12 text-slate-400 border border-dashed border-slate-700 rounded-lg">
+                No users found matching your filters.
+              </div>
+            ) : (
+              <div className="overflow-x-auto">
+                <Table>
+                  <TableHeader>
                     <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-slate-400">
-                        No buyers found.
-                      </TableCell>
+                      <TableHead className="w-[50px]">
+                        <Checkbox
+                          checked={selectedUsers.length === paginatedUsers.length && paginatedUsers.length > 0}
+                          onCheckedChange={toggleSelectAll}
+                          aria-label="Select all users on page"
+                        />
+                      </TableHead>
+                      <TableHead>Name</TableHead>
+                      <TableHead>Email</TableHead>
+                      <TableHead>Role</TableHead>
+                      <TableHead>Verified</TableHead>
+                      <TableHead>Banned</TableHead>
+                      <TableHead>Registered</TableHead>
+                      <TableHead className="text-right">Actions</TableHead>
                     </TableRow>
-                  ) : (
-                    buyers.map((u) => (
+                  </TableHeader>
+                  <TableBody>
+                    {paginatedUsers.map((u) => (
                       <TableRow key={u.id} className="hover:bg-slate-800/50 transition-colors">
-                        <TableCell>{u.full_name || "Unnamed"}</TableCell>
-                        <TableCell>{u.email}</TableCell>
-                        <TableCell>{new Date(u.created_at).toLocaleDateString("en-ZA")}</TableCell>
                         <TableCell>
-                          <Badge variant={u.banned ? "destructive" : "outline"}>
-                            {u.banned ? "Banned" : "Active"}
-                          </Badge>
+                          <Checkbox
+                            checked={selectedUsers.includes(u.id)}
+                            onCheckedChange={() => toggleSelectUser(u.id)}
+                            aria-label={`Select user ${u.full_name || u.email}`}
+                          />
                         </TableCell>
-                        <TableCell className="text-right">
-                          <Button
-                            variant="ghost"
-                            size="icon"
-                            onClick={() => viewProfile(u)}
-                            title="View Profile"
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant={u.banned ? "default" : "destructive"}
-                            size="sm"
-                            onClick={() => handleSingleAction(u.id, u.banned ? "unban" : "ban")}
-                          >
-                            {u.banned ? "Unban" : "Ban"}
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
-          </CardContent>
-        </Card>
-
-        {/* Sellers Table */}
-        <Card className="bg-slate-900/70 border-slate-700">
-          <CardHeader>
-            <CardTitle className="text-white flex items-center gap-2">
-              <Users className="h-5 w-5" />
-              Sellers ({sellers.length})
-            </CardTitle>
-          </CardHeader>
-          <CardContent>
-            <div className="overflow-x-auto">
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Name</TableHead>
-                    <TableHead>Email</TableHead>
-                    <TableHead>Verified</TableHead>
-                    <TableHead>Banned</TableHead>
-                    <TableHead className="text-right">Actions</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {sellers.length === 0 ? (
-                    <TableRow>
-                      <TableCell colSpan={5} className="text-center py-8 text-slate-400">
-                        No sellers found.
-                      </TableCell>
-                    </TableRow>
-                  ) : (
-                    sellers.map((u) => (
-                      <TableRow key={u.id} className="hover:bg-slate-800/50 transition-colors">
-                        <TableCell>{u.full_name || "Unnamed"}</TableCell>
+                        <TableCell className="font-medium">{u.full_name || "Unnamed"}</TableCell>
                         <TableCell>{u.email}</TableCell>
+                        <TableCell>
+                          <Badge variant="outline">{u.role}</Badge>
+                        </TableCell>
                         <TableCell>
                           <Badge variant={u.is_verified ? "default" : "secondary"}>
                             {u.is_verified ? "Verified" : "Pending"}
@@ -529,6 +474,7 @@ export default function UsersAdmin() {
                             {u.banned ? "Banned" : "Active"}
                           </Badge>
                         </TableCell>
+                        <TableCell>{new Date(u.created_at).toLocaleDateString("en-ZA")}</TableCell>
                         <TableCell className="text-right space-x-2">
                           <Button
                             variant="ghost"
@@ -547,48 +493,48 @@ export default function UsersAdmin() {
                           </Button>
                         </TableCell>
                       </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </div>
+                    ))}
+                  </TableBody>
+                </Table>
+              </div>
+            )}
+
+            {/* Pagination */}
+            {filteredUsers.length > 0 && (
+              <div className="flex items-center justify-between mt-6 flex-wrap gap-4">
+                <Button
+                  variant="outline"
+                  disabled={page === 1}
+                  onClick={() => setPage((p) => Math.max(1, p - 1))}
+                >
+                  Previous
+                </Button>
+
+                <span className="text-slate-400 text-sm">
+                  Page {page} of {totalPages} • {filteredUsers.length} users total
+                </span>
+
+                <Button
+                  variant="outline"
+                  disabled={page === totalPages}
+                  onClick={() => setPage((p) => p + 1)}
+                >
+                  Next
+                </Button>
+              </div>
+            )}
           </CardContent>
         </Card>
-
-        {/* Pagination */}
-        {filteredUsers.length > 0 && (
-          <div className="flex items-center justify-between mt-6 flex-wrap gap-4">
-            <Button
-              variant="outline"
-              disabled={page === 1}
-              onClick={() => setPage((p) => Math.max(1, p - 1))}
-            >
-              Previous
-            </Button>
-
-            <span className="text-slate-400 text-sm">
-              Page {page} of {totalPages} • {filteredUsers.length} users total
-            </span>
-
-            <Button
-              variant="outline"
-              disabled={page === totalPages}
-              onClick={() => setPage((p) => p + 1)}
-            >
-              Next
-            </Button>
-          </div>
-        )}
       </div>
 
       {/* Bulk Confirmation Dialog */}
       <AlertDialog open={!!confirmAction} onOpenChange={() => setConfirmAction(null)}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Confirm Action</AlertDialogTitle>
+            <AlertDialogTitle>Confirm Bulk Action</AlertDialogTitle>
             <AlertDialogDescription>
               Are you sure you want to {confirmAction?.type} {confirmAction?.userIds.length} user(s)?
-              This cannot be undone.
+              This action cannot be undone.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
@@ -608,7 +554,7 @@ export default function UsersAdmin() {
         <DialogContent className="max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="flex items-center justify-between">
-              <span>Seller Verification Review</span>
+              Seller Verification Review
               <Button variant="ghost" size="icon" onClick={() => setReviewSeller(null)}>
                 <X className="h-5 w-5" />
               </Button>
@@ -647,7 +593,6 @@ export default function UsersAdmin() {
                         variant="destructive"
                         onClick={() => {
                           setRejectLoading(true);
-                          // Optional: log reject reason if you add backend support later
                           setTimeout(() => {
                             setRejectLoading(false);
                             setReviewSeller(null);
@@ -669,7 +614,7 @@ export default function UsersAdmin() {
                     <h3 className="font-medium mb-1">Evidence Preview</h3>
                     {reviewSeller.evidence_url ? (
                       <div className="border border-slate-700 rounded-lg overflow-hidden bg-slate-950">
-                        {reviewSeller.evidence_url.match(/\.(jpeg|jpg|gif|png|webp)$/i) ? (
+                        {reviewSeller.evidence_url.match(/\.(jpeg|jpg|png|gif|webp)$/i) ? (
                           <img
                             src={reviewSeller.evidence_url}
                             alt="Verification evidence"

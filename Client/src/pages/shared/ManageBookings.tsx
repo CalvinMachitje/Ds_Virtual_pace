@@ -46,7 +46,7 @@ export default function ManageBookings() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
         <p className="text-xl mb-4">Failed to load bookings</p>
         <p className="text-slate-400 mb-6">{(error as Error).message}</p>
         <Button onClick={() => refetch()}>Try Again</Button>
@@ -58,7 +58,7 @@ export default function ManageBookings() {
   const completedBookings = data?.completed ?? [];
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:p-6">
       <div className="max-w-4xl mx-auto">
         <h1 className="text-3xl md:text-4xl font-bold text-white mb-6">Manage Bookings</h1>
 

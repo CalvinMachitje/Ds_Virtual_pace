@@ -72,7 +72,7 @@ export default function Chat() {
 
   if (!otherUserId || !user?.id) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6 md:ml-64">
+      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6">
         <div className="text-center space-y-6 max-w-md">
           <AlertCircle className="h-16 w-16 mx-auto text-yellow-500" />
           <h2 className="text-2xl font-bold">Invalid or inaccessible chat</h2>

@@ -16,7 +16,7 @@ export default function AdminLogin() {
 
   const { adminLogin, isAdmin, session } = useAuth();
 
-  // Auto-redirect if already logged in as admin
+  // Auto-redirect if already admin
   useEffect(() => {
     if (!loading && session && isAdmin) {
       console.log('[AdminLogin] Already admin - auto-redirecting');
@@ -39,31 +39,33 @@ export default function AdminLogin() {
 
       const { error } = await adminLogin(email, password);
 
-      if (error) throw error;
+      if (error) {
+        console.error('[AdminLogin] Backend error:', error);
+        throw error;
+      }
 
-      // Wait for context to update (auth listener is fast)
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Small delay to let AuthContext update
+      await new Promise(resolve => setTimeout(resolve, 800));
 
-      // Use the latest isAdmin state
       if (isAdmin) {
         console.log('[AdminLogin] Confirmed admin - navigating');
+        toast.success("Admin login successful");
         navigate('/admin', { replace: true });
       } else {
-        // Rare fallback
-        toast.warning("Admin status delayed - redirecting manually");
+        toast.warning("Admin status delayed - trying manual redirect");
         navigate('/admin', { replace: true });
       }
-    } catch (err: unknown) {
-      const error = err instanceof Error ? err : new Error(String(err));
-      toast.error(error.message || 'Admin login failed');
-      console.error('[AdminLogin] Full error:', error);
+    } catch (err: any) {
+      const message = err.message || 'Admin login failed. Please check credentials.';
+      toast.error(message);
+      console.error('[AdminLogin] Full error:', err);
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4 md:ml-64">
+    <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
       <Card className="w-full max-w-md bg-slate-900/80 border-slate-700">
         <CardHeader className="space-y-1">
           <div className="flex items-center justify-center mb-4">

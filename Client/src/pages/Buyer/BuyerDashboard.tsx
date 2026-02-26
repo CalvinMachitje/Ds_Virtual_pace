@@ -3,7 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Input } from "@/components/ui/input";
 import { Card, CardContent } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { Search, Zap, Briefcase, Star } from "lucide-react";
+import { Search, Zap, Briefcase, Star, AlertCircle } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { Link } from "react-router-dom";
@@ -27,7 +27,7 @@ const fetchBuyerDashboard = async () => {
   });
 
   if (!res.ok) {
-    const err = await res.json();
+    const err = await res.json().catch(() => ({}));
     throw new Error(err.error || "Failed to load dashboard data");
   }
 
@@ -40,9 +40,14 @@ export default function BuyerDashboard() {
     queryFn: fetchBuyerDashboard,
   });
 
+  // Safe fallbacks
+  const trendingCategories = data?.trendingCategories || [];
+  const featuredVAs = data?.featuredVAs || [];
+
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+        <AlertCircle className="h-16 w-16 mb-4" />
         <p className="text-xl mb-4">Failed to load dashboard</p>
         <p className="text-slate-400 mb-6">{(error as Error).message}</p>
         <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
@@ -53,7 +58,7 @@ export default function BuyerDashboard() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-4xl font-bold text-white mb-2">Welcome back</h1>
         <p className="text-slate-400 mb-8">What do you need help with today?</p>
@@ -83,49 +88,61 @@ export default function BuyerDashboard() {
             {/* Trending Categories */}
             <section className="mb-12">
               <h2 className="text-2xl font-semibold text-white mb-6">Trending Categories</h2>
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                {data?.trendingCategories.map((cat) => (
-                  <Link
-                    key={cat.name}
-                    to={`/category/${encodeURIComponent(cat.name.toLowerCase())}`}
-                    className="block"
-                  >
-                    <Card className="bg-slate-900/70 border-slate-700 hover:border-blue-600 transition-colors h-full">
-                      <CardContent className="p-6 text-center">
-                        <h3 className="font-medium text-white">{cat.name}</h3>
-                        <p className="text-sm text-slate-400 mt-1">{cat.count}+ assistants</p>
-                      </CardContent>
-                    </Card>
-                  </Link>
-                ))}
-              </div>
+              {trendingCategories.length === 0 ? (
+                <p className="text-slate-400 text-center py-8">
+                  No trending categories available right now.
+                </p>
+              ) : (
+                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                  {trendingCategories.map((cat) => (
+                    <Link
+                      key={cat.name}
+                      to={`/category/${encodeURIComponent(cat.name.toLowerCase())}`}
+                      className="block"
+                    >
+                      <Card className="bg-slate-900/70 border-slate-700 hover:border-blue-600 transition-colors h-full">
+                        <CardContent className="p-6 text-center">
+                          <h3 className="font-medium text-white">{cat.name}</h3>
+                          <p className="text-sm text-slate-400 mt-1">{cat.count}+ assistants</p>
+                        </CardContent>
+                      </Card>
+                    </Link>
+                  ))}
+                </div>
+              )}
             </section>
 
             {/* Featured Virtual Assistants */}
             <section className="mb-12">
               <h2 className="text-2xl font-semibold text-white mb-6">Featured VAs</h2>
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-                {data?.featuredVAs.map((va) => (
-                  <Link key={va.id} to={`/worker/${va.id}`} className="block">
-                    <Card className="bg-slate-900/70 border-slate-700 hover:border-blue-600 transition-colors overflow-hidden">
-                      <Avatar className="w-full h-48 rounded-none">
-                        <AvatarImage src={va.avatar_url} alt={va.full_name} className="object-cover" />
-                        <AvatarFallback>{va.full_name?.[0]}</AvatarFallback>
-                      </Avatar>
-                      <CardContent className="p-5">
-                        <h3 className="font-semibold text-white truncate">{va.full_name}</h3>
-                        <div className="flex items-center gap-1 mt-2">
-                          <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
-                          <span className="text-slate-300">{va.rating?.toFixed(1)}</span>
-                        </div>
-                        <p className="text-sm text-emerald-400 mt-2">
-                          Starts at R{va.starting_price?.toFixed(0) || "250"}/hr
-                        </p>
-                      </CardContent>
-                    </Card>
-                  </Link>
-                ))}
-              </div>
+              {featuredVAs.length === 0 ? (
+                <p className="text-slate-400 text-center py-8">
+                  No featured virtual assistants available right now.
+                </p>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                  {featuredVAs.map((va) => (
+                    <Link key={va.id} to={`/worker/${va.id}`} className="block">
+                      <Card className="bg-slate-900/70 border-slate-700 hover:border-blue-600 transition-colors overflow-hidden">
+                        <Avatar className="w-full h-48 rounded-none">
+                          <AvatarImage src={va.avatar_url} alt={va.full_name} className="object-cover" />
+                          <AvatarFallback>{va.full_name?.[0] || "?"}</AvatarFallback>
+                        </Avatar>
+                        <CardContent className="p-5">
+                          <h3 className="font-semibold text-white truncate">{va.full_name}</h3>
+                          <div className="flex items-center gap-1 mt-2">
+                            <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
+                            <span className="text-slate-300">{va.rating?.toFixed(1) || "N/A"}</span>
+                          </div>
+                          <p className="text-sm text-emerald-400 mt-2">
+                            Starts at R{va.starting_price?.toFixed(0) || "250"}/hr
+                          </p>
+                        </CardContent>
+                      </Card>
+                    </Link>
+                  ))}
+                </div>
+              )}
             </section>
 
             {/* Quick actions */}
@@ -139,6 +156,8 @@ export default function BuyerDashboard() {
                   </Button>
                 </CardContent>
               </Card>
+
+              {/* You can add more quick action cards here if needed */}
             </div>
           </>
         )}

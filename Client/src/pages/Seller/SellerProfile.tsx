@@ -156,19 +156,39 @@ export default function SellerProfile() {
         setVerificationLoading(true);
         setError(null);
 
-        // 1. Profile (public)
-        const profileRes = await fetch(`/api/profile/${id}`, {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
-          },
-        });
+        let profileData;
 
-        if (!profileRes.ok) {
-          const err = await profileRes.json();
-          throw new Error(err.error || "Profile not found");
+        // 1. Profile fetch logic
+        if (isOwnProfile) {
+          // Own profile → use seller-specific endpoint
+          const profileRes = await fetch("/api/seller/profile", {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+            },
+          });
+
+          if (!profileRes.ok) {
+            const err = await profileRes.json().catch(() => ({}));
+            throw new Error(err.error || "Failed to load your profile");
+          }
+
+          profileData = await profileRes.json();
+        } else {
+          // Viewing someone else's profile → use public endpoint (create later)
+          const profileRes = await fetch(`/api/profile/${id}`, {
+            headers: {
+              Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+            },
+          });
+
+          if (!profileRes.ok) {
+            const err = await profileRes.json().catch(() => ({}));
+            throw new Error(err.error || "Profile not found");
+          }
+
+          profileData = await profileRes.json();
         }
 
-        const profileData = await profileRes.json();
         setProfile(profileData);
 
         if (isOwnProfile) {
@@ -357,7 +377,7 @@ export default function SellerProfile() {
         const formData = new FormData();
         formData.append("avatar", selectedAvatarFile);
 
-        const avatarRes = await fetch("/api/profile/avatar", {
+        const avatarRes = await fetch("/api/seller/avatar", {  // ← updated endpoint
           method: "POST",
           headers: {
             Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
@@ -372,7 +392,7 @@ export default function SellerProfile() {
         setUploadingAvatar(false);
       }
 
-      const updateRes = await fetch(`/api/profile/${user.id}`, {
+      const updateRes = await fetch("/api/seller/profile", {  // ← updated endpoint
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -420,7 +440,7 @@ export default function SellerProfile() {
 
   if (loading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
         <div className="max-w-6xl mx-auto space-y-8">
           <Skeleton className="h-12 w-64" />
           <div className="flex flex-col items-center gap-6">
@@ -438,7 +458,7 @@ export default function SellerProfile() {
 
   if (error || !profile) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6 md:ml-64">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-white p-6">
         <div className="text-center space-y-4">
           <AlertCircle className="h-16 w-16 mx-auto text-red-500" />
           <h2 className="text-2xl font-bold">Profile Not Found</h2>
@@ -450,7 +470,7 @@ export default function SellerProfile() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-6xl mx-auto space-y-8">
         {/* Header */}
         <div className="flex items-center justify-between gap-4">

@@ -1,4 +1,5 @@
 # app/routes/shared.py
+from venv import logger
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
 from app.services.supabase_service import supabase
@@ -6,7 +7,7 @@ from datetime import datetime, timedelta
 import uuid
 import re
 
-bp = Blueprint("shared", __name__, url_prefix="/api")
+bp = Blueprint("shared", __name__, url_prefix="/api/shared")
 
 # Allowed redirect domains for password reset (add your production domain!)
 ALLOWED_REDIRECT_DOMAINS = [
@@ -144,36 +145,75 @@ def get_gig(id):
 # ────────────────────────────────────────────────
 @bp.route("/categories/<string:category>", methods=["GET"])
 def category_sellers(category):
+    """
+    GET /api/shared/categories/<category>
+    Returns paginated list of sellers who have gigs in the given category.
+    Supports filters: min_rating, max_price, search, page, limit.
+    Returns 404 if no gigs found in category.
+    """
     page = request.args.get("page", 1, type=int)
     limit = request.args.get("limit", 10, type=int)
     min_rating = request.args.get("min_rating", 0, type=float)
     max_price = request.args.get("max_price", None, type=float)
     search = request.args.get("search", "").strip()
 
+    # Validate pagination
+    if page < 1:
+        page = 1
+    if limit < 1 or limit > 50:
+        limit = 10
+
     try:
+        # Build base query
         query = supabase.table("gigs")\
             .select("""
                 id, title, description, price, seller_id,
                 profiles!seller_id (id, full_name, avatar_url, rating, is_verified, is_online)
             """)\
             .eq("status", "published")\
-            .ilike("category", f"%{category}%")
+            .ilike("category", f"%{category}%")  # case-insensitive partial match
 
+        # Apply search filter (on gig title or seller name)
         if search:
             if len(search) < 2:
-                return jsonify({"sellers": [], "total": 0, "page": page, "has_more": False}), 200
+                logger.info(f"Search term too short: '{search}'")
+                return jsonify({
+                    "sellers": [],
+                    "total": 0,
+                    "page": page,
+                    "has_more": False,
+                    "message": "Search term must be at least 2 characters"
+                }), 200
+
             query = query.or_(
                 f"title.ilike.%{search}%,profiles.full_name.ilike.%{search}%"
             )
 
+        # Min rating filter
         if min_rating > 0:
             query = query.gte("profiles.rating", min_rating)
 
+        # Max price filter
         if max_price is not None:
             query = query.lte("price", max_price)
 
+        # Execute query
         res = query.execute()
 
+        # Log result count
+        gig_count = len(res.data or [])
+        logger.info(f"Category '{category}': found {gig_count} gigs (page {page}, limit {limit})")
+
+        if gig_count == 0:
+            return jsonify({
+                "sellers": [],
+                "total": 0,
+                "page": page,
+                "has_more": False,
+                "message": f"No sellers found in category '{category}'"
+            }), 404  # Changed to 404 for better semantics
+
+        # Group gigs by seller
         grouped = {}
         for gig in res.data or []:
             seller = gig.pop("profiles", {}) or {}
@@ -189,7 +229,7 @@ def category_sellers(category):
                         "is_online": seller.get("is_online", False),
                     },
                     "gigs": [],
-                    "reviewCount": 0,
+                    "reviewCount": 0,  # You can enhance this later with real count
                 }
             grouped[seller_id]["gigs"].append({
                 "id": gig["id"],
@@ -200,6 +240,7 @@ def category_sellers(category):
 
         result = list(grouped.values())
 
+        # Pagination on grouped sellers
         start = (page - 1) * limit
         end = start + limit
         paginated = result[start:end]
@@ -208,13 +249,16 @@ def category_sellers(category):
             "sellers": paginated,
             "total": len(result),
             "page": page,
-            "has_more": end < len(result)
+            "has_more": end < len(result),
+            "message": f"Found {len(paginated)} sellers in '{category}'"
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Category error ({category}): {str(e)}")
-        return jsonify({"error": "Failed to load category"}), 500
-
+        logger.error(f"Category endpoint error for '{category}': {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "Failed to load category sellers",
+            "debug": str(e) if current_app.debug else None
+        }), 500
 
 # ────────────────────────────────────────────────
 # POST /api/bookings
@@ -483,3 +527,8 @@ def logout():
     # jti = get_jwt()["jti"]
     # revoked_tokens.add(jti)
     return jsonify({"message": "Logged out successfully"}), 200
+
+@bp.route("/debug/supabase", methods=["GET"])
+def debug_supabase():
+    status = supabase.check_connection()
+    return jsonify(status), 200

@@ -56,7 +56,7 @@ export default function AnalyticsAdmin() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
         <div className="max-w-6xl mx-auto">
           <Skeleton className="h-12 w-64 mb-8" />
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6 mb-8">
@@ -79,7 +79,7 @@ export default function AnalyticsAdmin() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+      <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
         <div className="text-center text-red-400">
           <p className="text-xl mb-4">Failed to load analytics</p>
           <p>{error.message}</p>
@@ -101,7 +101,7 @@ export default function AnalyticsAdmin() {
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-6xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">Analytics & Reports</h1>
 

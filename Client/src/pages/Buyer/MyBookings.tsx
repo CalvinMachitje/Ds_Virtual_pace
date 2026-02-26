@@ -192,7 +192,7 @@ export default function MyBookings() {
 
   if (isLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
         <div className="max-w-5xl mx-auto">
           <h1 className="text-3xl font-bold text-white mb-8">My Bookings</h1>
           <div className="space-y-6">
@@ -207,7 +207,7 @@ export default function MyBookings() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
         <p className="text-xl mb-4">Failed to load bookings</p>
         <p className="text-slate-400 mb-6">{error.message}</p>
         <Button onClick={() => queryClient.refetchQueries({ queryKey: ["my-bookings", user?.id] })}>
@@ -218,7 +218,7 @@ export default function MyBookings() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-5xl mx-auto">
         <h1 className="text-3xl font-bold text-white mb-8">My Bookings</h1>
 

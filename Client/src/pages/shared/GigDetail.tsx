@@ -129,14 +129,14 @@ export default function GigDetail() {
   if (isLoading) return <Skeleton className="min-h-screen" />;
 
   if (error) return (
-    <div className="min-h-screen flex flex-col items-center justify-center text-red-400 md:ml-64">
+    <div className="min-h-screen flex flex-col items-center justify-center text-red-400">
       <p>Failed to load gig</p>
       <Button onClick={() => window.location.reload()}>Retry</Button>
     </div>
   );
 
   if (!gig) return (
-    <div className="min-h-screen flex flex-col items-center justify-center text-slate-400 md:ml-64">
+    <div className="min-h-screen flex flex-col items-center justify-center text-slate-400">
       <Briefcase className="h-16 w-16 mb-6 opacity-50" />
       <h2 className="text-2xl font-bold mb-2">Gig Not Found</h2>
       <Link to="/gigs">
@@ -146,7 +146,7 @@ export default function GigDetail() {
   );
 
   return (
-    <div className="min-h-screen bg-slate-900 p-6 md:ml-64">
+    <div className="min-h-screen bg-slate-900 p-6">
       <div className="max-w-4xl mx-auto">
         <img
           src={gig.image_url || "/placeholder-gig-large.jpg"}

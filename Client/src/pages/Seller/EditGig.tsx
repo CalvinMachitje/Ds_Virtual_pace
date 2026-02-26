@@ -199,7 +199,7 @@ export default function EditGig() {
 
   if (isGigLoading) {
     return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
         <div className="max-w-4xl mx-auto space-y-8">
           <Skeleton height={400} />
           <Skeleton height={200} count={3} />
@@ -210,7 +210,7 @@ export default function EditGig() {
 
   if (gigError || !gig) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
         <AlertCircle className="h-12 w-12 mb-4" />
         <p className="text-xl mb-4">Gig not found or you don't own it</p>
         <Button onClick={() => navigate("/gigs")}>Back to Gigs</Button>
@@ -219,7 +219,7 @@ export default function EditGig() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24 ">
       <div className="max-w-4xl mx-auto">
         <div className="flex items-center gap-4 mb-8">
           <Button variant="ghost" size="icon" onClick={() => navigate(-1)}>

@@ -132,7 +132,7 @@ export default function MyGigs() {
 
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 md:ml-64">
+      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
         <AlertCircle className="h-12 w-12 mb-4" />
         <p className="text-xl mb-4">Failed to load your gigs</p>
         <p className="text-slate-400 mb-6">{(error as Error).message}</p>
@@ -144,7 +144,7 @@ export default function MyGigs() {
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 md:ml-64">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-7xl mx-auto">
         <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center mb-8 gap-4">
           <h1 className="text-3xl md:text-4xl font-bold text-white">My Gigs</h1>

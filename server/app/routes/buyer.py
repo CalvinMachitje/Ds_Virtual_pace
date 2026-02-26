@@ -1,4 +1,5 @@
 # app/routes/buyer.py
+from venv import logger
 from flask import Blueprint, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.supabase_service import supabase
@@ -18,54 +19,59 @@ avatar_upload_attempts = {}  # {user_id: last_upload_time}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+
 # ────────────────────────────────────────────────
 # GET /api/buyer/dashboard
-# Trending categories + featured VAs (public + authenticated)
+# Trending categories + featured sellers
 # ────────────────────────────────────────────────
 @bp.route("/dashboard", methods=["GET"])
-@jwt_required(optional=True)
+@jwt_required(optional=True)  # optional = allow unauthenticated visitors too
 def buyer_dashboard():
     try:
-        # Trending categories (last 30 days)
+        # 1. Trending categories (last 30 days)
         gigs = supabase.table("gigs")\
             .select("category")\
             .gte("created_at", (datetime.utcnow() - timedelta(days=30)).isoformat())\
             .execute().data or []
 
-        category_count = {}
-        for gig in gigs:
-            cat = gig.get("category")
-            if cat:
-                category_count[cat] = category_count.get(cat, 0) + 1
+        from collections import Counter
+        category_count = Counter(gig.get("category") for gig in gigs if gig.get("category"))
+        
+        trending_categories = [
+            {"name": name, "count": count}
+            for name, count in category_count.most_common(8)
+        ]
 
-        trending_categories = sorted(
-            [{"name": name, "count": count} for name, count in category_count.items()],
-            key=lambda x: x["count"],
-            reverse=True
-        )[:8]
-
-        # Featured VAs (highest rated, verified)
+        # 2. Featured sellers (verified + highest rated, limit 6)
         sellers_res = supabase.table("profiles")\
             .select("id, full_name, rating, avatar_url, is_verified")\
             .eq("role", "seller")\
             .eq("is_verified", True)\
             .order("rating", desc=True)\
-            .limit(6).execute()
+            .limit(6)\
+            .execute()
 
-        featured_vas = []
+        featured_sellers = []
         for seller in (sellers_res.data or []):
+            # Safely get minimum price (or fallback)
             min_price_res = supabase.table("gigs")\
                 .select("price")\
                 .eq("seller_id", seller["id"])\
                 .order("price")\
-                .limit(1).maybe_single().execute()
+                .limit(1)\
+                .maybe_single()\
+                .execute()
 
-            min_price = min_price_res.data["price"] if min_price_res.data else 250
+            min_price = (
+                min_price_res.data["price"]
+                if min_price_res.data and "price" in min_price_res.data
+                else 250
+            )
 
-            featured_vas.append({
+            featured_sellers.append({
                 "id": seller["id"],
-                "full_name": seller["full_name"],
-                "rating": seller["rating"] or 0,
+                "full_name": seller["full_name"] or "Unnamed Seller",
+                "rating": seller["rating"] or 0.0,
                 "avatar_url": seller["avatar_url"],
                 "starting_price": min_price,
                 "is_verified": seller["is_verified"]
@@ -73,23 +79,24 @@ def buyer_dashboard():
 
         return jsonify({
             "trendingCategories": trending_categories,
-            "featuredVAs": featured_vas
+            "featuredVAs": featured_sellers   # note: renamed to match frontend expectation
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Dashboard error: {str(e)}")
-        return jsonify({"error": "Failed to load dashboard"}), 500
-
+        current_app.logger.exception("Buyer dashboard failed")  # full traceback
+        return jsonify({
+            "error": "Failed to load dashboard data",
+            "details": str(e) if current_app.debug else None
+        }), 500
 
 # ────────────────────────────────────────────────
 # GET /api/buyer/conversations
-# List of active conversations/bookings
+# List buyer conversations
 # ────────────────────────────────────────────────
 @bp.route("/conversations", methods=["GET"])
 @jwt_required()
 def buyer_conversations():
     buyer_id = get_jwt_identity()
-
     try:
         bookings = supabase.table("bookings")\
             .select("""
@@ -109,9 +116,9 @@ def buyer_conversations():
                     "name": b["seller"]["full_name"] or "Seller",
                     "avatar": b["seller"]["avatar_url"]
                 },
-                "last_message": "Booking update or message",  # TODO: real last message
+                "last_message": "Booking update or message",
                 "last_message_time": b["start_time"],
-                "unread_count": 0,  # TODO: real unread
+                "unread_count": 0,
                 "status": b["status"]
             })
 
@@ -130,7 +137,6 @@ def buyer_conversations():
 @jwt_required()
 def buyer_bookings():
     buyer_id = get_jwt_identity()
-
     try:
         res = supabase.table("bookings")\
             .select("""
@@ -164,8 +170,8 @@ def buyer_bookings():
 
 
 # ────────────────────────────────────────────────
-# PATCH /api/bookings/:id/cancel
-# Cancel pending booking (buyer only)
+# PATCH /api/buyer/bookings/:id/cancel
+# Cancel pending booking
 # ────────────────────────────────────────────────
 @bp.route("/bookings/<string:id>/cancel", methods=["PATCH"])
 @jwt_required()
@@ -198,8 +204,7 @@ def cancel_booking(id):
                 "cancel_reason": reason,
                 "updated_at": "now()"
             })\
-            .eq("id", id)\
-            .execute()
+            .eq("id", id).execute()
 
         return jsonify({"message": "Booking cancelled successfully"}), 200
 
@@ -210,7 +215,7 @@ def cancel_booking(id):
 
 # ────────────────────────────────────────────────
 # POST /api/reviews
-# Submit review for completed booking (buyer only)
+# Submit review
 # ────────────────────────────────────────────────
 @bp.route("/reviews", methods=["POST"])
 @jwt_required()
@@ -240,7 +245,6 @@ def create_review():
         if booking.data["status"] != "completed":
             return jsonify({"error": "Can only review completed bookings"}), 400
 
-        # Check if already reviewed
         existing = supabase.table("reviews")\
             .select("id")\
             .eq("booking_id", booking_id)\
@@ -259,7 +263,6 @@ def create_review():
         }
 
         supabase.table("reviews").insert(review).execute()
-
         return jsonify({"message": "Review submitted successfully"}), 201
 
     except Exception as e:
@@ -269,7 +272,7 @@ def create_review():
 
 # ────────────────────────────────────────────────
 # GET /api/sellers/search?q=...
-# Search sellers (public + authenticated)
+# Search sellers
 # ────────────────────────────────────────────────
 @bp.route("/sellers/search", methods=["GET"])
 @jwt_required(optional=True)
@@ -294,7 +297,7 @@ def sellers_search():
 
 # ────────────────────────────────────────────────
 # POST /api/messages/start
-# Buyer starts new conversation (seller cannot initiate)
+# Start conversation
 # ────────────────────────────────────────────────
 @bp.route("/messages/start", methods=["POST"])
 @jwt_required()
@@ -308,7 +311,6 @@ def start_message():
     if not receiver_id or not content:
         return jsonify({"error": "Missing receiver or content"}), 400
 
-    # Optional: check if receiver is a seller
     receiver = supabase.table("profiles")\
         .select("role")\
         .eq("id", receiver_id)\
@@ -326,7 +328,6 @@ def start_message():
         }
 
         supabase.table("messages").insert(message).execute()
-
         return jsonify({"message": "Conversation started"}), 201
 
     except Exception as e:
@@ -336,7 +337,7 @@ def start_message():
 
 # ────────────────────────────────────────────────
 # GET /api/messages/:conversation_id
-# Get message history (authenticated + participant check)
+# Message history
 # ────────────────────────────────────────────────
 @bp.route("/messages/<string:conversation_id>", methods=["GET"])
 @jwt_required()
@@ -346,7 +347,6 @@ def get_chat_history(conversation_id):
     offset = request.args.get("offset", 0, type=int)
 
     try:
-        # Verify user is part of conversation
         participant = supabase.table("messages")\
             .select("id")\
             .or_(f"sender_id.eq.{user_id},receiver_id.eq.{user_id}")\
@@ -364,8 +364,7 @@ def get_chat_history(conversation_id):
             """)\
             .eq("booking_id", conversation_id)\
             .order("created_at", desc=False)\
-            .range(offset, offset + limit - 1)\
-            .execute()
+            .range(offset, offset + limit - 1).execute()
 
         formatted = []
         for msg in (res.data or []):
@@ -394,15 +393,13 @@ def get_chat_history(conversation_id):
 
 
 # ────────────────────────────────────────────────
-# GET /api/notifications
-# Recent notifications for current user
+# Notifications endpoints
 # ────────────────────────────────────────────────
 @bp.route("/notifications", methods=["GET"])
 @jwt_required()
 def get_notifications():
     user_id = get_jwt_identity()
     limit = request.args.get("limit", 20, type=int)
-
     try:
         res = supabase.table("notifications")\
             .select("""
@@ -433,21 +430,15 @@ def get_notifications():
         return jsonify({"error": "Failed to load notifications"}), 500
 
 
-# ────────────────────────────────────────────────
-# GET /api/notifications/unread-count
-# Unread notification count
-# ────────────────────────────────────────────────
 @bp.route("/notifications/unread-count", methods=["GET"])
 @jwt_required()
 def get_unread_count():
     user_id = get_jwt_identity()
-
     try:
         count_res = supabase.table("notifications")\
             .select("count", count="exact")\
             .eq("user_id", user_id)\
-            .is_("read_at", None)\
-            .execute()
+            .is_("read_at", None).execute()
 
         return jsonify({"unread_count": count_res.count or 0}), 200
 
@@ -456,17 +447,12 @@ def get_unread_count():
         return jsonify({"error": "Failed to get unread count"}), 500
 
 
-# ────────────────────────────────────────────────
-# PATCH /api/notifications/mark-read
-# Mark notifications as read (one or all)
-# ────────────────────────────────────────────────
 @bp.route("/notifications/mark-read", methods=["PATCH"])
 @jwt_required()
 def mark_notifications_read():
     user_id = get_jwt_identity()
     data = request.get_json()
-    notification_id = data.get("id")  # optional
-
+    notification_id = data.get("id")
     try:
         query = supabase.table("notifications")\
             .update({"read_at": "now()"})\
@@ -477,7 +463,6 @@ def mark_notifications_read():
             query = query.eq("id", notification_id)
 
         res = query.execute()
-
         return jsonify({"message": f"{res.count or 0} notification(s) marked as read"}), 200
 
     except Exception as e:
@@ -487,14 +472,13 @@ def mark_notifications_read():
 
 # ────────────────────────────────────────────────
 # POST /api/profile/avatar
-# Upload avatar with rate limiting + validation
+# Upload avatar
 # ────────────────────────────────────────────────
 @bp.route("/profile/avatar", methods=["POST"])
 @jwt_required()
 def upload_avatar():
     user_id = get_jwt_identity()
 
-    # Basic rate limit: 1 upload per 5 minutes
     last_upload = avatar_upload_attempts.get(user_id)
     if last_upload and (datetime.utcnow() - last_upload).total_seconds() < 300:
         return jsonify({"error": "Please wait 5 minutes before uploading again"}), 429
@@ -517,9 +501,8 @@ def upload_avatar():
         file.seek(0)
         ext = file.filename.rsplit('.', 1)[1].lower()
         filename = secure_filename(f"{user_id}_{uuid.uuid4().hex}.{ext}")
-        path = f"avatars/{user_id}/{filename}"  # user-specific subfolder
+        path = f"avatars/{user_id}/{filename}"
 
-        # Upload to Supabase Storage
         upload_res = supabase.storage.from_("avatars").upload(
             path=path,
             file=file_content,
@@ -531,20 +514,58 @@ def upload_avatar():
 
         public_url = supabase.storage.from_("avatars").get_public_url(path)
 
-        # Update profile
-        supabase.table("profiles")\
-            .update({"avatar_url": public_url})\
-            .eq("id", user_id)\
-            .execute()
-
-        # Update rate limit
+        supabase.table("profiles").update({"avatar_url": public_url}).eq("id", user_id).execute()
         avatar_upload_attempts[user_id] = datetime.utcnow()
 
-        return jsonify({
-            "message": "Avatar uploaded successfully",
-            "publicUrl": public_url
-        }), 200
+        return jsonify({"message": "Avatar uploaded successfully", "publicUrl": public_url}), 200
 
     except Exception as e:
         current_app.logger.error(f"Avatar upload error: {str(e)}")
         return jsonify({"error": "Failed to upload avatar"}), 500
+
+# buyer.py or shared.py
+
+@bp.route("/requests", methods=["POST"])
+@jwt_required()
+def create_request():
+    user_id = get_jwt_identity()
+    data = request.get_json()
+
+    required = ["category", "title", "description"]
+    if not all(k in data for k in required):
+        return jsonify({"error": "Missing required fields: category, title, description"}), 400
+
+    try:
+        req = {
+            "buyer_id": user_id,
+            "category": data["category"],
+            "title": data["title"],
+            "description": data["description"],
+            "budget": data.get("budget"),
+            "preferred_start_time": data.get("preferred_start"),   
+            "estimated_due_time": data.get("estimated_due"),    
+            "preferred_timeline": data.get("preferred_timeline"),
+            "seller_id": data.get("seller_id"),      
+            "status": "pending",
+            "created_at": "now()",
+            "updated_at": "now()"
+        }
+
+        res = supabase.table("job_requests").insert(req).execute()
+
+        if not res.data:
+            return jsonify({"error": "Failed to create request"}), 500
+
+        return jsonify({
+            "message": "Request submitted successfully",
+            "request_id": res.data[0]["id"]
+        }), 201
+
+    except Exception as e:
+        logger.error(f"Create request failed: {str(e)}")
+        return jsonify({"error": "Server error"}), 500
+
+@bp.route("/debug/supabase", methods=["GET"])
+def debug_supabase():
+    status = supabase.check_connection()
+    return jsonify(status), 200

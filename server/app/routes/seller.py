@@ -1,5 +1,7 @@
 # app/routes/seller.py
-from flask import Blueprint, request, jsonify, current_app
+from asyncio.log import logger
+from functools import wraps
+from flask import Blueprint, app, app, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.supabase_service import supabase
 from datetime import datetime, timedelta
@@ -18,6 +20,22 @@ image_upload_attempts = {}  # {seller_id: last_upload_time}
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
 
+def seller_required(f):
+    @wraps(f)
+    @jwt_required()
+    def decorated(*args, **kwargs):
+        user_id = get_jwt_identity()
+        profile = supabase.table("profiles")\
+            .select("role")\
+            .eq("id", user_id)\
+            .maybe_single()\
+            .execute()
+
+        if not profile.data or profile.data.get("role") != "seller":
+            return jsonify({"error": "Seller access required"}), 403
+
+        return f(*args, **kwargs)
+    return decorated
 
 # ────────────────────────────────────────────────
 # POST /api/seller/gigs
@@ -335,7 +353,7 @@ def upload_portfolio_images():
         current = supabase.table("profiles")\
             .select("portfolio_images")\
             .eq("id", seller_id)\
-            .single().execute().data
+            .maybe_single().execute().data
 
         existing = current.get("portfolio_images", []) if current else []
         updated = existing + uploaded_urls
@@ -677,3 +695,302 @@ def request_payout():
     except Exception as e:
         current_app.logger.error(f"Payout request error (seller {seller_id}): {str(e)}")
         return jsonify({"error": "Failed to request payout"}), 500
+
+# ────────────────────────────────────────────────
+# GET /api/seller/profile
+# Get the current authenticated seller's own profile (full details)
+# ────────────────────────────────────────────────
+@bp.route("/profile", methods=["GET"])
+@jwt_required()
+def get_seller_profile():
+    seller_id = get_jwt_identity()
+
+    try:
+        # Fetch profile
+        profile_res = supabase.table("profiles")\
+            .select("id, full_name, phone, email, role, avatar_url, bio, created_at, updated_at")\
+            .eq("id", seller_id)\
+            .maybe_single().execute()
+
+        if not profile_res.data:
+            return jsonify({"error": "Profile not found"}), 404
+
+        profile = profile_res.data
+
+        # Get rating & review count
+        reviews_res = supabase.table("reviews")\
+            .select("rating")\
+            .eq("reviewed_id", seller_id)\
+            .execute()
+
+        review_count = len(reviews_res.data or [])
+        avg_rating = sum(r["rating"] for r in (reviews_res.data or [])) / review_count if review_count else 0.0
+
+        return jsonify({
+            **profile,
+            "average_rating": round(avg_rating, 1),
+            "review_count": review_count
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Seller profile fetch error (seller {seller_id}): {str(e)}")
+        return jsonify({"error": "Failed to load profile"}), 500
+
+
+# ────────────────────────────────────────────────
+# PATCH /api/seller/profile
+# Update the current authenticated seller's own profile
+# Allowed fields: full_name, phone, bio, avatar_url
+# ────────────────────────────────────────────────
+@bp.route("/profile", methods=["PATCH"])
+@jwt_required()
+def update_seller_profile():
+    seller_id = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+
+    # Only allow specific fields
+    allowed_fields = ["full_name", "phone", "bio", "avatar_url"]
+    update_data = {k: v for k, v in data.items() if k in allowed_fields and v is not None}
+
+    if not update_data:
+        return jsonify({"error": "No valid fields to update"}), 400
+
+    # Basic validation
+    if "full_name" in update_data and (len(update_data["full_name"]) < 2 or len(update_data["full_name"]) > 100):
+        return jsonify({"error": "Full name must be 2–100 characters"}), 400
+
+    if "phone" in update_data and update_data["phone"] and not update_data["phone"].strip():
+        update_data["phone"] = None
+
+    if "bio" in update_data and update_data["bio"] and len(update_data["bio"]) > 1000:
+        return jsonify({"error": "Bio cannot exceed 1000 characters"}), 400
+
+    try:
+        # Update profile
+        res = supabase.table("profiles")\
+            .update({**update_data, "updated_at": "now()"})\
+            .eq("id", seller_id)\
+            .execute()
+
+        if not res.data:
+            return jsonify({"error": "Profile not found or update failed"}), 404
+
+        updated_profile = res.data[0]
+
+        # Optional: log the update
+        current_app.logger.info(f"Seller {seller_id} updated profile fields: {list(update_data.keys())}")
+
+        return jsonify({
+            "message": "Profile updated successfully",
+            "profile": {
+                "id": updated_profile["id"],
+                "full_name": updated_profile["full_name"],
+                "phone": updated_profile["phone"],
+                "email": updated_profile["email"],
+                "role": updated_profile["role"],
+                "avatar_url": updated_profile["avatar_url"],
+                "bio": updated_profile["bio"],
+                "updated_at": updated_profile["updated_at"]
+            }
+        }), 200
+
+    except Exception as e:
+        current_app.logger.error(f"Seller profile update error (seller {seller_id}): {str(e)}")
+        return jsonify({"error": "Failed to update profile"}), 500
+    
+# =============================================================================
+# AVAILABILITY – Seller manages own slots
+# =============================================================================
+
+@bp.route("/availability", methods=["GET"])
+@seller_required
+def list_availability():
+    user_id = get_jwt_identity()
+    try:
+        slots = supabase.table("seller_availability")\
+            .select("*")\
+            .eq("seller_id", user_id)\
+            .order("start_time")\
+            .execute().data or []
+        return jsonify(slots), 200
+
+    except Exception as e:
+        logger.error(f"Availability list failed: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "Failed to load availability",
+            "debug": str(e) if current_app.debug else None
+        }), 500
+
+
+@bp.route("/availability", methods=["POST"])
+@seller_required
+def create_availability():
+    user_id = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+
+    required = ["start_time", "end_time"]
+    if not all(k in data for k in required):
+        return jsonify({"error": "start_time and end_time required"}), 400
+
+    try:
+        start = data["start_time"]
+        end = data["end_time"]
+
+        if end <= start:
+            return jsonify({"error": "end_time must be after start_time"}), 400
+
+        notes = data.get("notes")
+        if notes is not None:
+            notes = str(notes).strip() or None  # safe strip
+
+        slot = {
+            "seller_id": user_id,
+            "start_time": start,
+            "end_time": end,
+            "notes": notes,
+            "is_booked": False,
+            "created_at": "now()",
+            "updated_at": "now()"
+        }
+
+        inserted = supabase.table("seller_availability").insert(slot).execute()
+
+        if not inserted.data:
+            return jsonify({"error": "Failed to create slot"}), 500
+
+        logger.info(f"Seller {user_id} added availability slot")
+        return jsonify(inserted.data[0]), 201
+
+    except Exception as e:
+        logger.error(f"Create availability failed: {str(e)}", exc_info=True)
+        return jsonify({
+            "error": "Failed to add slot",
+            "debug": str(e) if current_app.debug else None
+        }), 500
+
+
+@bp.route("/availability/<slot_id>", methods=["DELETE"])
+@seller_required
+def delete_availability(slot_id):
+    """Delete an availability slot (only if not booked)"""
+    user_id = get_jwt_identity()
+
+    try:
+        slot = supabase.table("seller_availability")\
+            .select("seller_id, is_booked")\
+            .eq("id", slot_id)\
+            .maybe_single()\
+            .execute()
+
+        if not slot.data:
+            return jsonify({"error": "Slot not found"}), 404
+
+        if slot.data["seller_id"] != user_id:
+            return jsonify({"error": "Not your slot"}), 403
+
+        if slot.data["is_booked"]:
+            return jsonify({"error": "Cannot delete booked slot"}), 400
+
+        supabase.table("seller_availability").delete().eq("id", slot_id).execute()
+
+        logger.info(f"Seller {user_id} deleted availability slot {slot_id}")
+        return jsonify({"message": "Slot deleted"}), 200
+
+    except Exception as e:
+        logger.error(f"Delete availability failed: {str(e)}")
+        return jsonify({"error": "Failed to delete slot"}), 500
+    
+@bp.route("/debug/supabase", methods=["GET"])
+def debug_supabase():
+    status = supabase.check_connection()
+    return jsonify(status), 200
+
+@bp.route("/offers", methods=["GET"])
+@seller_required
+def get_my_offers():
+    user_id = get_jwt_identity()
+    try:
+        offers = supabase.table("service_offers")\
+            .select("*, service_requests!request_id (title, description, budget, category)")\
+            .eq("seller_id", user_id)\
+            .eq("status", "pending")\
+            .order("created_at", desc=True)\
+            .execute().data or []
+        return jsonify(offers), 200
+    except Exception as e:
+        logger.error(f"Get offers failed: {str(e)}")
+        return jsonify({"error": "Failed to load offers"}), 500
+
+
+@bp.route("/offers/<offer_id>/respond", methods=["PATCH"])
+@seller_required
+def respond_to_offer(offer_id):
+    user_id = get_jwt_identity()
+    data = request.get_json()
+    action = data.get("action")  # "accept" or "reject"
+
+    if action not in ["accept", "reject"]:
+        return jsonify({"error": "action must be 'accept' or 'reject'"}), 400
+
+    try:
+        offer = supabase.table("service_offers")\
+            .select("id, request_id, status, seller_id")\
+            .eq("id", offer_id)\
+            .maybe_single()\
+            .execute()
+
+        if not offer.data or offer.data["seller_id"] != user_id:
+            return jsonify({"error": "Offer not found or not yours"}), 404
+
+        if offer.data["status"] != "pending":
+            return jsonify({"error": "Offer already processed"}), 400
+
+        # Update offer status
+        supabase.table("service_offers")\
+            .update({"status": "accepted" if action == "accept" else "rejected"})\
+            .eq("id", offer_id)\
+            .execute()
+
+        if action == "accept":
+            # Create booking
+            request_data = supabase.table("service_requests")\
+                .select("buyer_id, category, title, budget")\
+                .eq("id", offer.data["request_id"])\
+                .single()\
+                .execute().data
+
+            booking = {
+                "buyer_id": request_data["buyer_id"],
+                "seller_id": user_id,
+                "service": request_data["title"],
+                "price": request_data["budget"],
+                "status": "accepted",
+                "created_at": "now()",
+                "updated_at": "now()"
+            }
+
+            booking_res = supabase.table("bookings").insert(booking).execute()
+
+            # Update request to accepted
+            supabase.table("service_requests")\
+                .update({"status": "accepted"})\
+                .eq("id", offer.data["request_id"])\
+                .execute()
+
+            return jsonify({
+                "message": "Offer accepted – booking created",
+                "booking_id": booking_res.data[0]["id"]
+            }), 200
+
+        else:
+            # Update request back to pending or rejected
+            supabase.table("service_requests")\
+                .update({"status": "pending"})\
+                .eq("id", offer.data["request_id"])\
+                .execute()
+
+            return jsonify({"message": "Offer rejected"}), 200
+
+    except Exception as e:
+        logger.error(f"Respond to offer failed: {str(e)}")
+        return jsonify({"error": "Server error"}), 500

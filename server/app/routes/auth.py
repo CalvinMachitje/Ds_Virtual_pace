@@ -1,208 +1,137 @@
 # app/routes/auth.py
-from flask import Blueprint, request, jsonify, current_app
+from flask import Blueprint, request, jsonify
 from flask_jwt_extended import create_access_token, create_refresh_token, jwt_required, get_jwt_identity
 from app.services.supabase_service import supabase
-from datetime import datetime, timedelta
+from datetime import timedelta
 import re
-import uuid
+import logging
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
+logger = logging.getLogger(__name__)
 
-# Allowed redirect domains (update with your real production domains!)
 ALLOWED_REDIRECT_DOMAINS = [
     "localhost:5173",
     "127.0.0.1:5173",
-    "yourapp.com",
-    "www.yourapp.com",
-    "gig-connect.vercel.app",  # ← add your actual frontend domains
+    "gig-connect.vercel.app",
+    "www.gig-connect.vercel.app"
 ]
 
-# In-memory rate limiters (demo) — replace with Flask-Limiter + Redis in production
-signup_attempts = {}          # {ip: {"count": int, "last": datetime}}
-login_attempts = {}           # {email: {"count": int, "last": datetime}}
-reset_attempts = {}           # {email: {"count": int, "last": datetime}}
-
 def is_strong_password(password: str) -> bool:
-    """Basic password strength check"""
-    if len(password) < 10:
-        return False
-    if not re.search(r"[A-Z]", password):
-        return False
-    if not re.search(r"[a-z]", password):
-        return False
-    if not re.search(r"[0-9]", password):
-        return False
-    if not re.search(r"[!@#$%^&*(),.?\":{}|<>]", password):
-        return False
-    return True
+    return all([
+        len(password) >= 10,
+        re.search(r"[A-Z]", password),
+        re.search(r"[a-z]", password),
+        re.search(r"[0-9]", password),
+        re.search(r"[!@#$%^&*(),.?\":{}|<>]", password)
+    ])
 
-# ────────────────────────────────────────────────
-# POST /api/auth/signup
-# User registration with rate limiting + validation
-# ────────────────────────────────────────────────
+# ────────────────────────────────
+# POST /signup
+# ────────────────────────────────
 @bp.route("/signup", methods=["POST"])
 def signup():
-    ip = request.remote_addr
-    now = datetime.utcnow()
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
+    full_name = (data.get("full_name") or "").strip()
+    phone = (data.get("phone") or "").strip()
+    role = (data.get("role") or "").strip().lower()
 
-    # Rate limit: max 5 signups per IP per hour
-    attempt = signup_attempts.get(ip, {"count": 0, "last": now - timedelta(hours=1)})
-    if (now - attempt["last"]).total_seconds() < 3600:
-        if attempt["count"] >= 5:
-            return jsonify({"error": "Too many signup attempts. Try again in 1 hour"}), 429
-    else:
-        attempt = {"count": 0, "last": now}
-
-    attempt["count"] += 1
-    attempt["last"] = now
-    signup_attempts[ip] = attempt
-
-    data = request.get_json()
-    email = data.get("email", "").strip().lower()
-    password = data.get("password", "")
-    full_name = data.get("full_name", "").strip()
-    phone = data.get("phone", "").strip()
-    role = data.get("role", "").strip().lower()
-
-    # Required fields
     if not all([email, password, full_name, role]):
         return jsonify({"error": "Missing required fields"}), 400
 
-    # Validation
     if not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         return jsonify({"error": "Invalid email format"}), 400
 
     if role not in ["buyer", "seller"]:
-        return jsonify({"error": "Invalid role. Must be 'buyer' or 'seller'"}), 400
-
-    if len(full_name) < 2 or len(full_name) > 100:
-        return jsonify({"error": "Full name must be 2–100 characters"}), 400
+        return jsonify({"error": "Role must be 'buyer' or 'seller'"}), 400
 
     if not is_strong_password(password):
-        return jsonify({
-            "error": "Password must be at least 10 characters, contain uppercase, lowercase, number, and special character"
-        }), 400
+        return jsonify({"error": "Password must be ≥10 chars with uppercase, lowercase, number, special char"}), 400
 
     try:
         sign_up = supabase.auth.sign_up({
             "email": email,
             "password": password,
-            "options": {
-                "data": {
-                    "full_name": full_name,
-                    "phone": phone,
-                    "role": role
-                }
-            }
+            "options": {"data": {"full_name": full_name, "phone": phone, "role": role}}
         })
-
-        if sign_up.error:
-            current_app.logger.warning(f"Signup attempt failed for {email}: {sign_up.error.message}")
-            return jsonify({"error": "Signup failed. Email may already be in use."}), 400
 
         user = sign_up.user
         if not user:
-            return jsonify({"error": "Signup failed"}), 500
+            return jsonify({"error": "User creation failed"}), 500
 
-        # Insert profile
-        profile = {
+        # Insert into profiles table
+        supabase.table("profiles").insert({
             "id": user.id,
             "full_name": full_name,
             "email": email,
             "phone": phone,
             "role": role,
             "created_at": "now()"
-        }
-        supabase.table("profiles").insert(profile).execute()
+        }).execute()
 
-        # If email confirmation required (Supabase default)
+        # If no session returned (email confirmation needed)
         if not sign_up.session:
-            return jsonify({
-                "message": "User created. Please check your email to confirm.",
-                "email_confirmation_sent": True
-            }), 200
+            return jsonify({"success": True, "message": "Check email to confirm", "email_confirmation_sent": True}), 200
 
-        # Auto-confirmed (rare in production)
         access = create_access_token(identity=user.id, expires_delta=timedelta(hours=1))
         refresh = create_refresh_token(identity=user.id, expires_delta=timedelta(days=30))
 
         return jsonify({
+            "success": True,
             "access_token": access,
             "refresh_token": refresh,
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                "full_name": full_name,
-                "role": role,
-                "phone": phone
-            }
+            "user": {"id": user.id, "email": email, "full_name": full_name, "role": role, "phone": phone}
         }), 201
 
     except Exception as e:
-        current_app.logger.error(f"Signup error (email {email}): {str(e)}")
+        logger.error(f"Signup error {email}: {str(e)}", exc_info=True)
         return jsonify({"error": "Failed to create account"}), 500
 
 
-# ────────────────────────────────────────────────
-# POST /api/auth/login
-# Login with rate limiting
-# ────────────────────────────────────────────────
+# ────────────────────────────────
+# POST /login
+# ────────────────────────────────
 @bp.route("/login", methods=["POST"])
 def login():
-    data = request.get_json()
-    email = data.get("email", "").strip().lower()
-    password = data.get("password", "")
+    data = request.get_json(silent=True) or {}
+    email = (data.get("email") or "").strip().lower()
+    password = data.get("password") or ""
 
     if not email or not password:
         return jsonify({"error": "Email and password required"}), 400
 
-    # Rate limit: max 10 attempts per email per 15 min
-    now = datetime.utcnow()
-    attempt = login_attempts.get(email, {"count": 0, "last": now - timedelta(minutes=15)})
-    if (now - attempt["last"]).total_seconds() < 900:
-        if attempt["count"] >= 10:
-            return jsonify({"error": "Too many login attempts. Try again in 15 minutes"}), 429
-    else:
-        attempt = {"count": 0, "last": now}
-
-    attempt["count"] += 1
-    attempt["last"] = now
-    login_attempts[email] = attempt
-
     try:
-        auth = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        if auth.error:
-            current_app.logger.warning(f"Login failed for {email}: {auth.error.message}")
-            return jsonify({"error": "Invalid email or password"}), 401
+        auth_resp = supabase.auth.sign_in_with_password({"email": email, "password": password})
 
-        user = auth.user
-        profile = supabase.table("profiles").select("*").eq("id", user.id).single().execute().data or {}
+        if not auth_resp.user:
+            return jsonify({"error": "Invalid credentials"}), 401
+
+        user = auth_resp.user
+        profile_res = supabase.table("profiles").select("*").eq("id", user.id).maybe_single().execute()
+        profile = profile_res.data if profile_res and profile_res.data else {}
 
         access = create_access_token(identity=user.id, expires_delta=timedelta(hours=1))
         refresh = create_refresh_token(identity=user.id, expires_delta=timedelta(days=30))
 
         return jsonify({
+            "success": True,
             "access_token": access,
             "refresh_token": refresh,
-            "user": {
-                "id": user.id,
-                "email": user.email,
-                **profile
-            }
+            "user": {"id": user.id, "email": user.email, **profile}
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Login error (email {email}): {str(e)}")
-        return jsonify({"error": "Failed to log in"}), 500
+        logger.error(f"Login error {email}: {str(e)}", exc_info=True)
+        return jsonify({"error": "Login failed"}), 500
 
 
-# ────────────────────────────────────────────────
-# POST /api/auth/admin-login
-# Admin login (strict role check)
-# ────────────────────────────────────────────────
+# ────────────────────────────────
+# POST /admin-login – FIXED VERSION
+# ────────────────────────────────
 @bp.route("/admin-login", methods=["POST"])
 def admin_login():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     email = data.get("email", "").strip().lower()
     password = data.get("password", "")
 
@@ -210,100 +139,108 @@ def admin_login():
         return jsonify({"error": "Email and password required"}), 400
 
     try:
-        auth = supabase.auth.sign_in_with_password({"email": email, "password": password})
-        if auth.error:
-            return jsonify({"error": "Invalid credentials"}), 401
+        # Step 1: Authenticate
+        auth_res = supabase.auth.sign_in_with_password({
+            "email": email,
+            "password": password
+        })
 
-        user = auth.user
-        admin = supabase.table("admins").select("admin_level").eq("id", user.id).single().execute()
+        user = auth_res.user
+        if not user:
+            logger.warning(f"Login failed for {email}: no user object")
+            return jsonify({"error": "Invalid email or password"}), 401
 
-        if not admin.data:
+        logger.info(f"Auth success: {email} (id: {user.id})")
+
+        # Step 2: Safe admin record check — avoid .data crash
+        admin_res = supabase.table("admins")\
+            .select("admin_level, permissions")\
+            .eq("id", user.id)\
+            .maybe_single().execute()
+
+        if admin_res is None or not hasattr(admin_res, 'data') or admin_res.data is None:
+            logger.info(f"No admin record found for {email} (id: {user.id})")
             return jsonify({"error": "Not an admin account"}), 403
 
-        profile = supabase.table("profiles").select("*").eq("id", user.id).single().execute().data or {}
+        # Now safe to access .data
+        admin_level = admin_res.data.get("admin_level", "standard")
+        permissions = admin_res.data.get("permissions", {})
 
+        # Step 3: Profile (optional)
+        profile_res = supabase.table("profiles")\
+            .select("*")\
+            .eq("id", user.id)\
+            .maybe_single().execute()
+        profile = profile_res.data if profile_res and hasattr(profile_res, 'data') and profile_res.data else {}
+
+        # Step 4: Tokens
         access = create_access_token(identity=user.id, expires_delta=timedelta(hours=1))
         refresh = create_refresh_token(identity=user.id, expires_delta=timedelta(days=30))
 
         return jsonify({
+            "success": True,
             "access_token": access,
             "refresh_token": refresh,
             "user": {
                 "id": user.id,
                 "email": user.email,
                 "role": "admin",
-                "admin_level": admin.data["admin_level"],
+                "admin_level": admin_level,
+                "permissions": permissions,
                 **profile
             }
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Admin login error (email {email}): {str(e)}")
-        return jsonify({"error": "Failed to log in"}), 500
+        error_str = str(e)
+        logger.error(f"Admin login failed for {email}: {error_str}", exc_info=True)
 
+        if "invalid login credentials" in error_str.lower():
+            return jsonify({"error": "Invalid email or password"}), 401
 
-# ────────────────────────────────────────────────
-# POST /api/auth/oauth/<provider>
-# OAuth login/start (redirect validation)
-# ────────────────────────────────────────────────
-@bp.route("/oauth/<provider>", methods=["POST"])
-def oauth(provider):
-    if provider not in ["google", "facebook"]:
-        return jsonify({"error": "Unsupported provider"}), 400
+        if "missing response" in error_str.lower() or "204" in error_str:
+            logger.warning(f"PostgREST 204 (no row) for admin check - treated as 403")
+            return jsonify({"error": "Not an admin account"}), 403
 
-    data = request.get_json()
-    redirect_to = data.get("redirectTo", f"{request.host_url}dashboard")
+        return jsonify({"error": "Authentication failed"}), 500
 
-    # Validate redirect domain
-    parsed = redirect_to.lower()
-    allowed = any(domain in parsed for domain in ALLOWED_REDIRECT_DOMAINS)
-
-    if not allowed:
-        current_app.logger.warning(f"Invalid OAuth redirect attempt: {redirect_to}")
-        redirect_to = f"{request.host_url}dashboard"  # safe fallback
-
+# ────────────────────────────────
+# POST /logout
+# ────────────────────────────────
+@bp.route("/logout", methods=["POST"])
+@jwt_required()
+def logout():
     try:
-        url = supabase.auth.get_oauth_url(provider=provider, redirect_to=redirect_to)
-        return jsonify({"redirectUrl": url}), 200
+        # Optional: revoke tokens if using blocklist (Redis)
+        # redis_client.setex(f"blacklist_{get_jwt()['jti']}", timedelta(days=30), "true")
+        supabase.auth.sign_out()
+    except Exception as e:
+        logger.warning(f"Logout error: {str(e)}")
+
+    return jsonify({"success": True, "message": "Logged out"}), 200
+
+
+# ────────────────────────────────
+# GET /me – current user info
+# ────────────────────────────────
+@bp.route("/me", methods=["GET"])
+@jwt_required()
+def get_current_user():
+    user_id = get_jwt_identity()
+    try:
+        profile_res = supabase.table("profiles").select("*").eq("id", user_id).maybe_single().execute()
+        profile = profile_res.data if profile_res and profile_res.data else None
+
+        if not profile:
+            return jsonify({"error": "Profile not found"}), 404
+
+        return jsonify({"success": True, "user": profile}), 200
 
     except Exception as e:
-        current_app.logger.error(f"OAuth URL error ({provider}): {str(e)}")
-        return jsonify({"error": "Failed to start OAuth flow"}), 500
-
-
-# ────────────────────────────────────────────────
-# POST /api/auth/resend-confirmation
-# Resend signup confirmation email (rate-limited)
-# ────────────────────────────────────────────────
-@bp.route("/resend-confirmation", methods=["POST"])
-def resend():
-    data = request.get_json()
-    email = data.get("email", "").strip().lower()
-
-    if not email:
-        return jsonify({"error": "Email required"}), 400
-
-    # Rate limit: max 3 resends per email per hour
-    now = datetime.utcnow()
-    attempt = reset_attempts.get(email, {"count": 0, "last": now - timedelta(hours=1)})
-    if (now - attempt["last"]).total_seconds() < 3600:
-        if attempt["count"] >= 3:
-            return jsonify({"error": "Too many resend requests. Try again in 1 hour"}), 429
-    else:
-        attempt = {"count": 0, "last": now}
-
-    attempt["count"] += 1
-    attempt["last"] = now
-    reset_attempts[email] = attempt
-
-    try:
-        res = supabase.auth.resend({"type": "signup", "email": email})
-        if res.error:
-            current_app.logger.warning(f"Resend confirmation failed for {email}: {res.error.message}")
-            return jsonify({"error": "Failed to resend confirmation"}), 400
-
-        return jsonify({"message": "Confirmation email resent"}), 200
-
-    except Exception as e:
-        current_app.logger.error(f"Resend confirmation error (email {email}): {str(e)}")
-        return jsonify({"error": "Failed to resend confirmation"}), 500
+        logger.error(f"/me failed {user_id}: {str(e)}", exc_info=True)
+        return jsonify({"error": "Failed to fetch user info"}), 500
+    
+@bp.route("/debug/supabase", methods=["GET"])
+def debug_supabase():
+    status = supabase.check_connection()
+    return jsonify(status), 200
