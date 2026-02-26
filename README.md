@@ -1,47 +1,74 @@
-The only requirement is having Node.js & npm installed - [install with nvm](https://github.com/nvm-sh/nvm#installing-and-updating)
+# D's Virtual Space – Freelance & Gig Marketplace Platform
 
-Follow these steps:
+Gig Connect is a full-stack freelance/gig marketplace connecting buyers with skilled sellers (freelancers / employees).  
+Buyers post job requests → admins review & assign sellers → real-time offers & bookings.
 
-```sh
-# Step 1: Clone the repository using the project's Git URL.
-git clone <YOUR_GIT_URL>
+Built with reliability and admin control in mind — stable data fetching, real-time notifications, and a powerful admin dashboard.
 
-# Step 2: Navigate to the project directory.
-cd <YOUR_PROJECT_NAME>
+## Features
 
-# Step 3: Install the necessary dependencies.
-npm i
+### Buyer
+- Browse categories & seller gigs
+- Submit detailed job requests (title, description, budget, preferred start/due dates)
+- View personal dashboard of submitted requests
 
-# Step 4: Start the development server with auto-reloading and an instant preview.
-npm run dev
-```
+### Seller (in progress)
+- Receive job assignments & offers in real-time
+- Accept/reject offers
+- Manage availability & gigs
 
-**Edit a file directly in GitHub**
+### Admin Dashboard
+- Manage pending job requests: view, reject, **assign sellers** (advanced modal)
+- Seller assignment modal:
+  - Search, sort (rating/name/availability), filter (available/high-rated)
+  - Bulk assign multiple sellers
+  - Optional notes/reason + custom confirmation dialog
+  - Seller preview (avatar, bio, gig count, sample gigs)
+- Gig approval/rejection
+- Full bookings overview: filter by status, update status (complete/cancel)
+- Stable UI with loading states, error handling, toasts, refresh buttons
 
-- Navigate to the desired file(s).
-- Click the "Edit" button (pencil icon) at the top right of the file view.
-- Make your changes and commit the changes.
+### Backend
+- Supabase (PostgreSQL + Auth + Storage + Realtime)
+- Flask API with JWT auth & rate limiting
+- Real-time notifications via Socket.IO
+- Robust query builder with pagination & filtering
 
-**Use GitHub Codespaces**
+## Tech Stack
 
-- Navigate to the main page of your repository.
-- Click on the "Code" button (green button) near the top right.
-- Select the "Codespaces" tab.
-- Click on "New codespace" to launch a new Codespace environment.
-- Edit files directly within the Codespace and commit and push your changes once you're done.
+**Frontend**
+- React 18 + TypeScript
+- Vite (fast dev & build)
+- Tailwind CSS + shadcn/ui
+- Tanstack Query (data fetching, mutations, caching)
+- Lucide React icons
+- Sonner (toasts)
+- date-fns (dates)
+- framer-motion (optional animations)
 
-## What technologies are used for this project?
+**Backend**
+- Python 3.11+
+- Flask
+- Supabase-py
+- Flask-JWT-Extended
+- Flask-Limiter
+- Socket.IO
+- Logging & structured error handling
 
-This project is built with:
+**Database & Services**
+- Supabase (PostgreSQL, Auth, Storage, Realtime)
+- Redis (caching / sessions – optional)
 
-- Vite
-- TypeScript
-- React
-- shadcn-ui
-- Tailwind CSS
+**Tools & Dev**
+- Git
+- VS Code
+- Node.js 20+ / npm
+- Python 3.11+
 
+## Prerequisites
 
-
-To connect a domain, navigate to Project > Settings > Domains and click Connect Domain.
-
-Read more here: [Setting up a custom domain](https://docs.lovable.dev/features/custom-domain#custom-domain)
+- Node.js 20+ & npm (or pnpm/yarn)
+- Python 3.11+
+- Git
+- Supabase account & project (free tier works)
+- (Optional) Redis if using caching/sessions
