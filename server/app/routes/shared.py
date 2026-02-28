@@ -1,39 +1,39 @@
 # app/routes/shared.py
-from venv import logger
 from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import jwt_required, get_jwt_identity, create_access_token
+from flask_jwt_extended import jwt_required, get_jwt_identity
 from app.services.supabase_service import supabase
 from datetime import datetime, timedelta
-import uuid
 import re
 
-bp = Blueprint("shared", __name__, url_prefix="/api/shared")
+bp = Blueprint("shared", __name__, url_prefix="/api")
 
-# Allowed redirect domains for password reset (add your production domain!)
+# Allowed redirect domains for password reset
 ALLOWED_REDIRECT_DOMAINS = [
     "localhost:5173",
     "127.0.0.1:5173",
-    "yourapp.com",           # ← change to your real production domain
-    "www.yourapp.com",
+    # Add your production domains here, e.g.:
+    # "yourapp.com",
+    # "www.yourapp.com",
 ]
 
-# Simple in-memory rate limit for forgot-password (demo) — use Flask-Limiter + Redis in prod
+# In-memory rate limit for forgot-password (demo only — use Redis + Flask-Limiter in production)
 reset_attempts = {}  # {email: {"count": int, "last_attempt": datetime}}
 
 
 # ────────────────────────────────────────────────
 # GET /api/gigs
-# List published gigs (paginated + filters, public)
+# Public: List published gigs (paginated + basic filters)
 # ────────────────────────────────────────────────
 @bp.route("/gigs", methods=["GET"])
 def list_gigs():
+    """
+    Public endpoint: Browse all published gigs
+    Query params: page, limit, search, category
+    """
     page = request.args.get("page", 0, type=int)
     limit = request.args.get("limit", 9, type=int)
     search = request.args.get("search", "").strip()
-    category = request.args.get("category")
-    min_rating = request.args.get("min_rating", 0, type=float)
-    max_price = request.args.get("max_price", None, type=float)
-    sort = request.args.get("sort", "newest")
+    category = request.args.get("category", "").strip()
 
     from_idx = page * limit
     to_idx = from_idx + limit - 1
@@ -41,15 +41,19 @@ def list_gigs():
     try:
         query = supabase.table("gigs")\
             .select("""
-                id, title, description, price, category, created_at, image_url, available,
-                profiles!gigs_seller_id_fkey (full_name, rating, review_count)
+                id,
+                title,
+                description,
+                price,
+                category,
+                gallery_urls,
+                created_at,
+                seller:seller_id (full_name, avatar_url)
             """)\
-            .eq("status", "published")
+            .eq("status", "published")\
+            .order("created_at", desc=True)
 
-        if search:
-            # Prevent overly broad searches
-            if len(search) < 2:
-                return jsonify({"gigs": [], "nextPage": None, "totalCount": 0}), 200
+        if search and len(search) >= 2:
             query = query.or_(
                 f"title.ilike.%{search}%,description.ilike.%{search}%"
             )
@@ -57,352 +61,72 @@ def list_gigs():
         if category:
             query = query.eq("category", category)
 
-        if min_rating > 0:
-            query = query.gte("profiles.rating", min_rating)
-
-        if max_price is not None:
-            query = query.lte("price", max_price)
-
-        # Sorting
-        if sort == "price-low":
-            query = query.order("price", desc=False)
-        elif sort == "price-high":
-            query = query.order("price", desc=True)
-        elif sort == "rating-high":
-            query = query.order("profiles.rating", desc=True)
-        else:  # newest
-            query = query.order("created_at", desc=True)
-
         res = query.range(from_idx, to_idx).execute()
 
         gigs = []
-        for row in res.data or []:
-            profile = row.pop("profiles", {}) or {}
+        for gig in (res.data or []):
+            seller = gig.pop("seller", {}) or {}
             gigs.append({
-                **row,
-                "seller_name": profile.get("full_name", "Unknown Seller"),
-                "rating": profile.get("rating", 0),
-                "review_count": profile.get("review_count", 0),
+                **gig,
+                "seller_name": seller.get("full_name", "Unknown"),
+                "seller_avatar": seller.get("avatar_url"),
             })
 
         return jsonify({
             "gigs": gigs,
-            "nextPage": page + 1 if len(gigs) == limit else None,
-            "totalCount": res.count or 0
+            "total": res.count or 0,
+            "page": page,
+            "limit": limit,
+            "has_more": len(gigs) == limit
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Error fetching gigs: {str(e)}")
+        current_app.logger.exception("Public gigs fetch failed")
         return jsonify({"error": "Failed to load gigs"}), 500
 
 
 # ────────────────────────────────────────────────
 # GET /api/gigs/:id
-# Get single gig details (public)
+# Public: Get single gig details
 # ────────────────────────────────────────────────
 @bp.route("/gigs/<string:id>", methods=["GET"])
-def get_gig(id):
+def get_gig(id: str):
+    """
+    Public endpoint: Fetch details for a single published gig
+    """
     try:
-        # Validate UUID format
-        try:
-            uuid.UUID(id)
-        except ValueError:
-            return jsonify({"error": "Invalid gig ID"}), 400
-
         res = supabase.table("gigs")\
             .select("""
-                id, title, description, price, category, created_at, image_url,
-                seller_id,
-                profiles!seller_id (full_name, avatar_url, is_verified, rating, review_count)
+                id,
+                title,
+                description,
+                price,
+                category,
+                gallery_urls,
+                created_at,
+                seller:seller_id (full_name, avatar_url, is_verified)
             """)\
             .eq("id", id)\
             .eq("status", "published")\
-            .maybe_single().execute()
+            .maybe_single()\
+            .execute()
 
         if not res.data:
             return jsonify({"error": "Gig not found or not published"}), 404
 
-        profile = res.data.pop("profiles", {}) or {}
-        gig = {
-            **res.data,
-            "seller_name": profile.get("full_name", "Unknown"),
-            "seller_avatar_url": profile.get("avatar_url"),
-            "seller_is_verified": profile.get("is_verified", False),
-            "rating": profile.get("rating", 0),
-            "review_count": profile.get("review_count", 0),
-        }
-
-        return jsonify(gig), 200
-
-    except Exception as e:
-        current_app.logger.error(f"Error fetching gig {id}: {str(e)}")
-        return jsonify({"error": "Failed to load gig"}), 500
-
-
-# ────────────────────────────────────────────────
-# GET /api/categories/:category
-# Sellers + gigs in a specific category
-# ────────────────────────────────────────────────
-@bp.route("/categories/<string:category>", methods=["GET"])
-def category_sellers(category):
-    """
-    GET /api/shared/categories/<category>
-    Returns paginated list of sellers who have gigs in the given category.
-    Supports filters: min_rating, max_price, search, page, limit.
-    Returns 404 if no gigs found in category.
-    """
-    page = request.args.get("page", 1, type=int)
-    limit = request.args.get("limit", 10, type=int)
-    min_rating = request.args.get("min_rating", 0, type=float)
-    max_price = request.args.get("max_price", None, type=float)
-    search = request.args.get("search", "").strip()
-
-    # Validate pagination
-    if page < 1:
-        page = 1
-    if limit < 1 or limit > 50:
-        limit = 10
-
-    try:
-        # Build base query
-        query = supabase.table("gigs")\
-            .select("""
-                id, title, description, price, seller_id,
-                profiles!seller_id (id, full_name, avatar_url, rating, is_verified, is_online)
-            """)\
-            .eq("status", "published")\
-            .ilike("category", f"%{category}%")  # case-insensitive partial match
-
-        # Apply search filter (on gig title or seller name)
-        if search:
-            if len(search) < 2:
-                logger.info(f"Search term too short: '{search}'")
-                return jsonify({
-                    "sellers": [],
-                    "total": 0,
-                    "page": page,
-                    "has_more": False,
-                    "message": "Search term must be at least 2 characters"
-                }), 200
-
-            query = query.or_(
-                f"title.ilike.%{search}%,profiles.full_name.ilike.%{search}%"
-            )
-
-        # Min rating filter
-        if min_rating > 0:
-            query = query.gte("profiles.rating", min_rating)
-
-        # Max price filter
-        if max_price is not None:
-            query = query.lte("price", max_price)
-
-        # Execute query
-        res = query.execute()
-
-        # Log result count
-        gig_count = len(res.data or [])
-        logger.info(f"Category '{category}': found {gig_count} gigs (page {page}, limit {limit})")
-
-        if gig_count == 0:
-            return jsonify({
-                "sellers": [],
-                "total": 0,
-                "page": page,
-                "has_more": False,
-                "message": f"No sellers found in category '{category}'"
-            }), 404  # Changed to 404 for better semantics
-
-        # Group gigs by seller
-        grouped = {}
-        for gig in res.data or []:
-            seller = gig.pop("profiles", {}) or {}
-            seller_id = gig["seller_id"]
-            if seller_id not in grouped:
-                grouped[seller_id] = {
-                    "seller": {
-                        "id": seller_id,
-                        "full_name": seller.get("full_name", "Unknown"),
-                        "avatar_url": seller.get("avatar_url"),
-                        "rating": seller.get("rating", 0),
-                        "is_verified": seller.get("is_verified", False),
-                        "is_online": seller.get("is_online", False),
-                    },
-                    "gigs": [],
-                    "reviewCount": 0,  # You can enhance this later with real count
-                }
-            grouped[seller_id]["gigs"].append({
-                "id": gig["id"],
-                "title": gig["title"],
-                "description": gig["description"],
-                "price": gig["price"],
-            })
-
-        result = list(grouped.values())
-
-        # Pagination on grouped sellers
-        start = (page - 1) * limit
-        end = start + limit
-        paginated = result[start:end]
+        gig = res.data
+        seller = gig.pop("seller", {}) or {}
 
         return jsonify({
-            "sellers": paginated,
-            "total": len(result),
-            "page": page,
-            "has_more": end < len(result),
-            "message": f"Found {len(paginated)} sellers in '{category}'"
-        }), 200
-
-    except Exception as e:
-        logger.error(f"Category endpoint error for '{category}': {str(e)}", exc_info=True)
-        return jsonify({
-            "error": "Failed to load category sellers",
-            "debug": str(e) if current_app.debug else None
-        }), 500
-
-# ────────────────────────────────────────────────
-# POST /api/bookings
-# Create new booking request (buyer only)
-# ────────────────────────────────────────────────
-@bp.route("/bookings", methods=["POST"])
-@jwt_required()
-def create_booking():
-    buyer_id = get_jwt_identity()
-    data = request.get_json()
-
-    gig_id = data.get("gig_id")
-    note = data.get("note", "").strip()
-
-    if not gig_id:
-        return jsonify({"error": "gig_id required"}), 400
-
-    try:
-        gig = supabase.table("gigs")\
-            .select("id, seller_id, price, title, status")\
-            .eq("id", gig_id)\
-            .maybe_single().execute().data
-
-        if not gig:
-            return jsonify({"error": "Gig not found"}), 404
-
-        if gig["status"] != "published":
-            return jsonify({"error": "Gig is not available for booking"}), 400
-
-        # Prevent self-booking
-        if gig["seller_id"] == buyer_id:
-            return jsonify({"error": "Cannot book your own gig"}), 403
-
-        booking = {
-            "gig_id": gig_id,
-            "buyer_id": buyer_id,
-            "seller_id": gig["seller_id"],
-            "price": gig["price"],
-            "service": gig["title"],
-            "note": note if note else None,
-            "start_time": datetime.utcnow().isoformat(),
-            "status": "pending",
-            "created_at": "now()",
-            "updated_at": "now()"
-        }
-
-        res = supabase.table("bookings").insert(booking).execute()
-
-        if not res.data:
-            return jsonify({"error": "Failed to create booking"}), 500
-
-        return jsonify({
-            "message": "Booking request sent",
-            "booking_id": res.data[0]["id"]
-        }), 201
-
-    except Exception as e:
-        current_app.logger.error(f"Booking creation error (buyer {buyer_id}): {str(e)}")
-        return jsonify({"error": "Failed to create booking"}), 500
-
-
-# ────────────────────────────────────────────────
-# GET /api/bookings/:id/review
-# Get booking details for review/payment (buyer only)
-# ────────────────────────────────────────────────
-@bp.route("/bookings/<string:id>/review", methods=["GET"])
-@jwt_required()
-def review_booking(id):
-    user_id = get_jwt_identity()
-
-    try:
-        booking = supabase.table("bookings")\
-            .select("""
-                id, seller_id, price, service, start_time, duration,
-                seller:profiles!seller_id (full_name, avatar_url)
-            """)\
-            .eq("id", id)\
-            .eq("buyer_id", user_id)\
-            .maybe_single().execute().data
-
-        if not booking:
-            return jsonify({"error": "Booking not found or not yours"}), 404
-
-        seller = booking.pop("seller", {}) or {}
-
-        # Example fee/tax calculation (customize as needed)
-        fee = booking["price"] * 0.10
-        taxes = booking["price"] * 0.15
-        total = booking["price"] + fee + taxes
-
-        return jsonify({
-            **booking,
+            **gig,
             "seller_name": seller.get("full_name", "Unknown"),
-            "avatar_url": seller.get("avatar_url"),
-            "fee": round(fee, 2),
-            "taxes": round(taxes, 2),
-            "total": round(total, 2),
-            "payment_method": "Credit Card"  # Replace with real user payment method fetch
+            "seller_avatar": seller.get("avatar_url"),
+            "seller_is_verified": seller.get("is_verified", False),
         }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Review booking error (user {user_id}, booking {id}): {str(e)}")
-        return jsonify({"error": "Failed to load booking details"}), 500
-
-
-# ────────────────────────────────────────────────
-# GET /api/profiles/:id/verification
-# Public verification status (no auth required)
-# ────────────────────────────────────────────────
-@bp.route("/profiles/<string:id>/verification", methods=["GET"])
-def get_verification_status(id):
-    try:
-        # Validate UUID format
-        try:
-            uuid.UUID(id)
-        except ValueError:
-            return jsonify({"error": "Invalid profile ID"}), 400
-
-        profile = supabase.table("profiles")\
-            .select("trust_score, jobs_done, rating")\
-            .eq("id", id)\
-            .maybe_single().execute().data
-
-        if not profile:
-            return jsonify({"error": "Profile not found"}), 404
-
-        # Real credentials would come from a verifications table
-        credentials = [
-            {"title": "Identity Verified", "desc": "Government ID verified", "icon": "UserCheck"},
-            {"title": "Background Check", "desc": "Clear criminal record", "icon": "ShieldCheck"},
-            {"title": "Skills Verified", "desc": "Top performer in category", "icon": "Star"},
-            {"title": "Platform Certified", "desc": "Completed training", "icon": "CheckCircle2"},
-        ]
-
-        return jsonify({
-            "trust_score": profile.get("trust_score", 85),
-            "jobs_done": profile.get("jobs_done", 0),
-            "rating": profile.get("rating", 0),
-            "credentials": credentials
-        }), 200
-
-    except Exception as e:
-        current_app.logger.error(f"Verification status error (profile {id}): {str(e)}")
-        return jsonify({"error": "Failed to load verification status"}), 500
+        current_app.logger.exception(f"Gig fetch failed for ID {id}")
+        return jsonify({"error": "Failed to load gig"}), 500
 
 
 # ────────────────────────────────────────────────
@@ -411,7 +135,7 @@ def get_verification_status(id):
 # ────────────────────────────────────────────────
 @bp.route("/auth/forgot-password", methods=["POST"])
 def forgot_password():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     email = data.get("email", "").strip().lower()
 
     if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
@@ -422,7 +146,7 @@ def forgot_password():
     attempt = reset_attempts.get(email, {"count": 0, "last_attempt": now - timedelta(hours=1)})
     if (now - attempt["last_attempt"]).total_seconds() < 3600:
         if attempt["count"] >= 3:
-            return jsonify({"error": "Too many reset requests. Please try again in 1 hour"}), 429
+            return jsonify({"error": "Too many reset requests. Try again in 1 hour"}), 429
     else:
         attempt = {"count": 0, "last_attempt": now}
 
@@ -431,24 +155,19 @@ def forgot_password():
     reset_attempts[email] = attempt
 
     try:
-        # Validate redirect_to domain
         redirect_to = request.args.get("redirect_to", f"{request.host_url}reset-password")
-        parsed = redirect_to.lower()
-        allowed = any(domain in parsed for domain in ALLOWED_REDIRECT_DOMAINS)
+        allowed = any(domain in redirect_to.lower() for domain in ALLOWED_REDIRECT_DOMAINS)
 
         if not allowed:
-            current_app.logger.warning(f"Invalid redirect attempt: {redirect_to}")
-            redirect_to = f"{request.host_url}reset-password"  # fallback
+            current_app.logger.warning(f"Invalid redirect domain: {redirect_to}")
+            redirect_to = f"{request.host_url}reset-password"
 
-        res = supabase.auth.reset_password_for_email(
+        supabase.auth.reset_password_for_email(
             email,
             redirect_to=redirect_to
         )
 
-        if res:
-            return jsonify({"message": "If the email exists, a reset link has been sent"}), 200
-        else:
-            return jsonify({"error": "Failed to send reset email"}), 500
+        return jsonify({"message": "If the email exists, a reset link has been sent"}), 200
 
     except Exception as e:
         current_app.logger.error(f"Forgot password error (email {email}): {str(e)}")
@@ -461,7 +180,7 @@ def forgot_password():
 # ────────────────────────────────────────────────
 @bp.route("/auth/reset-password", methods=["POST"])
 def reset_password():
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
     token = data.get("token")
     password = data.get("password", "").strip()
 
@@ -475,7 +194,6 @@ def reset_password():
         res = supabase.auth.update_user({"password": password})
 
         if res.user:
-            # Optional: invalidate all refresh tokens (Supabase handles via config)
             return jsonify({"message": "Password reset successful"}), 200
         else:
             return jsonify({"error": "Invalid or expired token"}), 400
@@ -496,20 +214,16 @@ def get_session():
 
     try:
         profile = supabase.table("profiles")\
-            .select("email, full_name, avatar_url, last_sign_in_at, provider")\
+            .select("email, full_name, avatar_url, last_sign_in_at")\
             .eq("id", user_id)\
-            .single().execute().data
+            .single()\
+            .execute()\
+            .data
 
         if not profile:
             return jsonify({"error": "User not found"}), 404
 
-        return jsonify({
-            "email": profile["email"],
-            "full_name": profile["full_name"],
-            "avatar_url": profile["avatar_url"],
-            "last_sign_in_at": profile["last_sign_in_at"],
-            "provider": profile["provider"] or "email"
-        }), 200
+        return jsonify(profile), 200
 
     except Exception as e:
         current_app.logger.error(f"Session fetch error (user {user_id}): {str(e)}")
@@ -518,17 +232,23 @@ def get_session():
 
 # ────────────────────────────────────────────────
 # POST /api/auth/logout
-# Server-side logout (optional - invalidate token if using blocklist)
+# Server-side logout (optional – can be used with token blocklist)
 # ────────────────────────────────────────────────
 @bp.route("/auth/logout", methods=["POST"])
 @jwt_required()
 def logout():
-    # If using JWT blocklist (recommended for real logout):
-    # jti = get_jwt()["jti"]
-    # revoked_tokens.add(jti)
+    # Future: implement token revocation / blocklist if needed
     return jsonify({"message": "Logged out successfully"}), 200
 
+
+# ────────────────────────────────────────────────
+# GET /api/debug/supabase
+# Simple connection check (remove in production)
+# ────────────────────────────────────────────────
 @bp.route("/debug/supabase", methods=["GET"])
 def debug_supabase():
-    status = supabase.check_connection()
-    return jsonify(status), 200
+    try:
+        status = supabase.check_connection()
+        return jsonify(status), 200
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

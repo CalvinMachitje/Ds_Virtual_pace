@@ -1,5 +1,5 @@
 // src/pages/admin/UsersAdmin.tsx
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
@@ -29,7 +29,6 @@ import {
   Ban,
   UserCheck,
   UserX,
-  RotateCcw,
   AlertCircle,
   Eye,
   Users,
@@ -56,6 +55,7 @@ import {
 } from "@/components/ui/dialog";
 import { Textarea } from "@/components/ui/textarea";
 import { useNavigate } from "react-router-dom";
+import { formatDistanceToNow } from "date-fns";
 
 type User = {
   id: string;
@@ -97,34 +97,33 @@ export default function UsersAdmin() {
   const pageSize = 10;
 
   // Fetch users from Flask API
-const { data: response = {}, isLoading, error, refetch } = useQuery<any>({
-  queryKey: ["admin-users"],
-  queryFn: async () => {
-    const token = localStorage.getItem("access_token");
-    if (!token) throw new Error("No auth token");
+  const { data: response = {}, isLoading, error, refetch } = useQuery<any>({
+    queryKey: ["admin-users"],
+    queryFn: async () => {
+      const token = localStorage.getItem("access_token");
+      if (!token) throw new Error("No auth token");
 
-    const res = await fetch("/api/admin/users", {
-      headers: { Authorization: `Bearer ${token}` },
-    });
+      const res = await fetch("/api/admin/users", {
+        headers: { Authorization: `Bearer ${token}` },
+      });
 
-    if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
-      throw new Error(err.error || "Failed");
-    }
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed");
+      }
 
-    return res.json();
-  },
-  retry: 1,
-});
+      return res.json();
+    },
+    retry: 1,
+  });
 
-// Extract users array from response
-const users: User[] = response.users || [];
+  // Extract users array from response
+  const users: User[] = response.users || [];
 
-// Now use users as before
-const pendingVerifications = useMemo(
-  () => users.filter(u => u.role === "seller" && !u.is_verified),
-  [users]
-);
+  const pendingVerifications = useMemo(
+    () => users.filter(u => u.role === "seller" && !u.is_verified),
+    [users]
+  );
 
   const filteredUsers = useMemo(() => {
     let result = [...users];
@@ -174,9 +173,6 @@ const pendingVerifications = useMemo(
   }, [filteredUsers, page]);
 
   const totalPages = Math.ceil(filteredUsers.length / pageSize);
-
-  const buyers = useMemo(() => filteredUsers.filter(u => u.role === "buyer"), [filteredUsers]);
-  const sellers = useMemo(() => filteredUsers.filter(u => u.role === "seller"), [filteredUsers]);
 
   const handleSort = (key: keyof User) => {
     setSortConfig((prev) => ({
@@ -295,7 +291,7 @@ const pendingVerifications = useMemo(
   }
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-750 via-indigo-950 to-slate-900 p-6">
+    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-7xl mx-auto space-y-8">
         {/* Header */}
         <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -393,6 +389,7 @@ const pendingVerifications = useMemo(
                             variant="default"
                             size="sm"
                             onClick={() => verifySeller(u.id)}
+                            disabled={approveLoading}
                           >
                             <UserCheck className="h-4 w-4 mr-1" />
                             Verify
@@ -415,7 +412,7 @@ const pendingVerifications = useMemo(
           </CardContent>
         </Card>
 
-        {/* Users Table (combined for simplicity) */}
+        {/* Users Table */}
         <Card className="bg-slate-900/70 border-slate-700">
           <CardHeader>
             <CardTitle className="text-white flex items-center gap-2">

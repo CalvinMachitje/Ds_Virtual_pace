@@ -2,28 +2,26 @@
 import { useState, useEffect, useMemo } from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import {
-  Home,
-  Search,
-  Calendar,
-  MessageSquare,
-  User,
-  Briefcase,
-  ClipboardList,
-  LogOut,
-  Users,
-  FileText,
-  BarChart3,
-  Settings,
-  ShieldCheck,
   LayoutDashboard,
   Store,
   Wrench,
   UserCircle,
-  CreditCard,
-  Menu,
-  X,
+  MessageSquare,
+  LogOut,
   ChevronLeft,
   ChevronRight,
+  Menu,
+  BarChart3,
+  Briefcase,
+  Calendar,
+  ClipboardList,
+  CreditCard,
+  FileText,
+  Settings,
+  ShieldCheck,
+  Users,
+  HistoryIcon,
+  MessageCircle,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/context/AuthContext";
@@ -41,7 +39,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import Skeleton from "react-loading-skeleton";
 
 // ────────────────────────────────────────────────
-// Nav item shape
+// Nav item definition
 // ────────────────────────────────────────────────
 interface NavItem {
   icon: React.ComponentType<{ className?: string }>;
@@ -51,7 +49,7 @@ interface NavItem {
   exact?: boolean;
   onClick?: () => void;
   adminOnly?: boolean;
-  section?: string;
+  section: "general" | "marketplace" | "admin" | "account";
 }
 
 export default function NavLayout({ children }: { children: React.ReactNode }) {
@@ -59,18 +57,17 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
   const navigate = useNavigate();
   const { userRole, user, loading, signOut } = useAuth();
   const [mobileOpen, setMobileOpen] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(() => {
+    const saved = localStorage.getItem("sidebar-collapsed");
+    return saved ? JSON.parse(saved) : false;
+  });
 
   const queryClient = useQueryClient();
 
   // ────────────────────────────────────────────────
-  // Unread messages (buyer/seller only)
+  // Unread messages count (real-time)
   // ────────────────────────────────────────────────
-  const {
-    data: unreadCount = 0,
-    isLoading: unreadLoading,
-    error: unreadError,
-  } = useQuery<number>({
+  const { data: unreadCount = 0 } = useQuery<number>({
     queryKey: ["unread-messages", user?.id],
     queryFn: async () => {
       if (!user?.id || userRole === "admin") return 0;
@@ -85,14 +82,10 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
       return count ?? 0;
     },
     enabled: !!user?.id && userRole !== "admin" && !loading,
-    staleTime: 1000 * 30,
-    gcTime: 1000 * 60 * 5,
+    staleTime: 30_000,
   });
 
-  useEffect(() => {
-    if (unreadError) toast.error("Failed to load unread messages");
-  }, [unreadError]);
-
+  // Real-time unread message updates
   useEffect(() => {
     if (!user?.id || userRole === "admin" || loading) return;
 
@@ -110,52 +103,99 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
           queryClient.setQueryData<number>(["unread-messages", user.id], (old = 0) => old + 1);
         }
       )
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "messages",
+          filter: `receiver_id=eq.${user.id}`,
+        },
+        (payload) => {
+          if (payload.new.read_at && !payload.old.read_at) {
+            queryClient.setQueryData<number>(["unread-messages", user.id], (old = 0) => Math.max(0, old - 1));
+          }
+        }
+      )
       .subscribe();
 
     return () => {
-      supabase.removeChannel(channel);
+      supabase.removeChannel(channel).catch((err) => {
+        console.warn("Failed to remove channel:", err);
+      });
     };
   }, [user?.id, userRole, loading, queryClient]);
 
+  // Persist sidebar collapsed state
+  useEffect(() => {
+    localStorage.setItem("sidebar-collapsed", JSON.stringify(isCollapsed));
+  }, [isCollapsed]);
+
   // ────────────────────────────────────────────────
-  // Nav items
+  // Navigation items (dynamic based on role)
   // ────────────────────────────────────────────────
   const navItems = useMemo<NavItem[]>(() => {
-    const base: NavItem[] = [
-      { icon: LayoutDashboard, label: "Dashboard", path: "/dashboard", exact: true, section: "general" },
+    const items: NavItem[] = [
+      {
+        icon: LayoutDashboard,
+        label: "Dashboard",
+        path: "/dashboard",
+        exact: true,
+        section: "general",
+      },
     ];
 
     if (userRole === "buyer") {
-      base.push(
+      items.push(
         { icon: Briefcase, label: "Gigs", path: "/gigs", section: "marketplace" },
-        { icon: Calendar, label: "My Bookings", path: "/my-bookings", section: "marketplace" }
+        { icon: Calendar, label: "My Bookings", path: "/my-bookings", section: "marketplace" },
+        // Added: Support link for buyers
+        {
+          icon: MessageSquare,
+          label: "Support",
+          path: "/support",
+          section: "account",
+        }
       );
     }
 
     if (userRole === "seller") {
-      base.push(
+      items.push(
         { icon: Briefcase, label: "My Gigs", path: "/my-gigs", section: "marketplace" },
-        { icon: ClipboardList, label: "Bookings", path: "/seller-bookings", section: "marketplace" }
+        { icon: ClipboardList, label: "Bookings", path: "/seller-bookings", section: "marketplace" },
+        // Added: Support link for sellers
+        {
+          icon: MessageSquare,
+          label: "Support",
+          path: "/support",
+          section: "account",
+        }
       );
     }
 
     if (userRole === "admin") {
-      base.push(
-        { icon: Users, label: "Users", path: "/admin/users", section: "admin", adminOnly: true },
-        { icon: FileText, label: "Gigs", path: "/admin/gigs", section: "admin", adminOnly: true },
-        { icon: Calendar, label: "Bookings", path: "/admin/bookings", section: "admin", adminOnly: true },
-        { icon: ShieldCheck, label: "Verifications", path: "/admin/verifications", section: "admin", adminOnly: true },
-        { icon: CreditCard, label: "Payments", path: "/admin/payments", section: "admin", adminOnly: true },
-        { icon: BarChart3, label: "Analytics", path: "/admin/analytics", section: "admin", adminOnly: true },
-        { icon: Settings, label: "Settings", path: "/admin/settings", section: "admin", adminOnly: true }
+      items.push(
+        { icon: Users, label: "Users", path: "/admin/users", adminOnly: true, section: "admin" },
+        { icon: FileText, label: "Gigs", path: "/admin/gigs", adminOnly: true, section: "admin" },
+        { icon: Calendar, label: "Bookings", path: "/admin/bookings", adminOnly: true, section: "admin" },
+        { icon: ShieldCheck, label: "Verifications", path: "/admin/verifications", adminOnly: true, section: "admin" },
+        { icon: CreditCard, label: "Payments", path: "/admin/payments", adminOnly: true, section: "admin" },
+        { icon: BarChart3, label: "Analytics", path: "/admin/analytics", adminOnly: true, section: "admin" },
+        { icon: Settings, label: "Settings", path: "/admin/settings", adminOnly: true, section: "admin" },
+        { icon: MessageCircle, label: "Support", path: "/admin/support", adminOnly: true, section: "admin" },
+        { icon: HistoryIcon, label: "Audit Logs", path: "/admin/logs", adminOnly: true, section: "admin" }
+
       );
     }
 
-    base.push(
+    items.push(
       {
         icon: MessageSquare,
         label: "Messages",
-        path: userRole === "buyer" ? "/messages/buyer" : userRole === "seller" ? "/messages/seller" : "/admin/support",
+        path:
+          userRole === "buyer" || userRole === "seller"
+            ? "/messages"
+            : "/admin/support",
         badge: unreadCount > 0 ? unreadCount : undefined,
         section: "account",
       },
@@ -163,9 +203,15 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
         icon: UserCircle,
         label: "Profile",
         path:
-          userRole === "buyer" ? (user?.id ? `/profile/${user.id}` : "#") :
-          userRole === "seller" ? (user?.id ? `/seller-profile/${user.id}` : "#") :
-          "/admin/profile",
+          userRole === "buyer"
+            ? user?.id
+              ? `/profile/${user.id}`
+              : "#"
+            : userRole === "seller"
+            ? user?.id
+              ? `/seller-profile/${user.id}`
+              : "#"
+            : "/admin/profile",
         section: "account",
       },
       {
@@ -186,9 +232,12 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
       }
     );
 
-    return base;
+    return items;
   }, [userRole, user?.id, unreadCount, signOut, navigate, queryClient]);
 
+  // ────────────────────────────────────────────────
+  // Sidebar Content (shared between desktop & mobile)
+  // ────────────────────────────────────────────────
   const SidebarContent = () => (
     <div className="flex flex-col h-full bg-gradient-to-b from-slate-950 to-slate-900">
       <div className="flex items-center justify-between p-4 border-b border-slate-800/70">
@@ -209,8 +258,8 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
           variant="ghost"
           size="icon"
           className="hidden md:flex text-slate-400 hover:text-white"
-          onClick={() => setIsCollapsed(prev => !prev)}
-          aria-label={isCollapsed ? "Expand" : "Collapse"}
+          onClick={() => setIsCollapsed((prev) => !prev)}
+          aria-label={isCollapsed ? "Expand sidebar" : "Collapse sidebar"}
         >
           {isCollapsed ? <ChevronRight className="h-5 w-5" /> : <ChevronLeft className="h-5 w-5" />}
         </Button>
@@ -231,9 +280,11 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
               </div>
             </AccordionTrigger>
             <AccordionContent>
-              {navItems.filter(item => item.section === "general").map(item => (
-                <SidebarLink key={item.path} item={item} isCollapsed={isCollapsed} />
-              ))}
+              {navItems
+                .filter((item) => item.section === "general")
+                .map((item) => (
+                  <SidebarLink key={item.path} item={item} isCollapsed={isCollapsed} />
+                ))}
             </AccordionContent>
           </AccordionItem>
 
@@ -246,9 +297,11 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
                 </div>
               </AccordionTrigger>
               <AccordionContent>
-                {navItems.filter(item => item.section === "marketplace").map(item => (
-                  <SidebarLink key={item.path} item={item} isCollapsed={isCollapsed} />
-                ))}
+                {navItems
+                  .filter((item) => item.section === "marketplace")
+                  .map((item) => (
+                    <SidebarLink key={item.path} item={item} isCollapsed={isCollapsed} />
+                  ))}
               </AccordionContent>
             </AccordionItem>
           )}
@@ -262,9 +315,11 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
                 </div>
               </AccordionTrigger>
               <AccordionContent>
-                {navItems.filter(item => item.adminOnly).map(item => (
-                  <SidebarLink key={item.path} item={item} isCollapsed={isCollapsed} />
-                ))}
+                {navItems
+                  .filter((item) => item.adminOnly)
+                  .map((item) => (
+                    <SidebarLink key={item.path} item={item} isCollapsed={isCollapsed} />
+                  ))}
               </AccordionContent>
             </AccordionItem>
           )}
@@ -277,12 +332,14 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
               </div>
             </AccordionTrigger>
             <AccordionContent>
-              {navItems.filter(item => item.section === "account" && !item.onClick).map(item => (
-                <SidebarLink key={item.path} item={item} isCollapsed={isCollapsed} />
-              ))}
+              {navItems
+                .filter((item) => item.section === "account" && !item.onClick)
+                .map((item) => (
+                  <SidebarLink key={item.path} item={item} isCollapsed={isCollapsed} />
+                ))}
 
               <button
-                onClick={navItems.find(i => i.onClick)?.onClick}
+                onClick={navItems.find((i) => i.onClick)?.onClick}
                 className={cn(
                   "mt-2 w-full flex items-center gap-3 px-4 py-3 rounded-lg text-red-400 hover:bg-red-950/40 transition-colors",
                   isCollapsed && "justify-center px-2"
@@ -320,11 +377,13 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
         {!isCollapsed && <span>{item.label}</span>}
 
         {item.badge !== undefined && item.badge > 0 && (
-          <span className={cn(
-            "ml-auto bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full",
-            isCollapsed && "absolute -top-1 -right-1"
-          )}>
-            {item.badge}
+          <span
+            className={cn(
+              "ml-auto bg-red-500 text-white text-xs font-bold px-2 py-0.5 rounded-full",
+              isCollapsed && "absolute -top-1 -right-1 min-w-[18px] h-5 flex items-center justify-center"
+            )}
+          >
+            {item.badge > 99 ? "99+" : item.badge}
           </span>
         )}
 
@@ -363,7 +422,7 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
 
   return (
     <div className="flex min-h-screen bg-slate-950 text-slate-100">
-      {/* Desktop Sidebar – single sidebar for all */}
+      {/* Desktop Sidebar */}
       <aside
         className={cn(
           "hidden md:block fixed inset-y-0 left-0 z-30 bg-slate-950 border-r border-slate-800 shadow-2xl transition-all duration-300 ease-in-out",
@@ -385,24 +444,26 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
         </SheetContent>
       </Sheet>
 
-      {/* Main Content – adjusts to sidebar width */}
+      {/* Main Content */}
       <main
         className={cn(
           "flex-1 transition-all duration-300 min-h-screen",
-          "md:ml-16 md:pl-0",           // collapsed: 64px (w-16)
-          !isCollapsed && "md:ml-64",   // expanded: 256px (w-64)
-          "pt-16 md:pt-0",              // mobile header offset
-          "pb-24 md:pb-0"               // mobile bottom nav offset (only when present)
+          isCollapsed ? "md:ml-16" : "md:ml-64",
+          "pt-16 md:pt-0", // mobile header offset
+          "pb-24 md:pb-0"  // mobile bottom nav offset
         )}
       >
         {children}
       </main>
 
-      {/* Mobile Bottom Nav – ONLY for buyer/seller */}
+      {/* Mobile Bottom Nav – only for buyer/seller */}
       {!isAdmin && (
         <nav className="fixed bottom-0 inset-x-0 z-40 bg-slate-950/90 backdrop-blur-lg border-t border-slate-800 md:hidden">
           <div className="flex justify-around items-center h-16 px-2 max-w-screen-sm mx-auto">
-            {navItems.map(item => {
+            {navItems.map((item) => {
+              // Only show relevant items in bottom nav (exclude admin-only)
+              if (item.adminOnly) return null;
+
               if (item.onClick) {
                 return (
                   <button
@@ -434,7 +495,7 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
                   <div className="relative">
                     <item.icon className="h-6 w-6" />
                     {item.badge !== undefined && item.badge > 0 && (
-                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-4.5 px-1.5 rounded-full flex items-center justify-center">
+                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold min-w-[18px] h-5 px-1.5 rounded-full flex items-center justify-center">
                         {item.badge > 99 ? "99+" : item.badge}
                       </span>
                     )}

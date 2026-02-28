@@ -6,7 +6,7 @@ import { useAuth } from "@/context/AuthContext";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Calendar, Clock, MessageSquare, Loader2, AlertCircle, Link } from "lucide-react";
+import { Calendar, Clock, MessageSquare, Loader2, AlertCircle } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { toast } from "sonner";
@@ -21,6 +21,7 @@ import {
 import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { Link } from "react-router-dom";
 
 type Booking = {
   id: string;
@@ -130,7 +131,7 @@ export default function MyBookings() {
         throw new Error("Invalid review data");
       }
 
-      const res = await fetch("/api/reviews", {
+      const res = await fetch("/api/buyer/reviews", {  // ← FIXED: correct endpoint
         method: "POST",
         headers: {
           "Content-Type": "application/json",
@@ -144,9 +145,11 @@ export default function MyBookings() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to submit review");
       }
+
+      return res.json();
     },
     onSuccess: () => {
       toast.success("Review submitted! Thank you.");
@@ -302,9 +305,16 @@ export default function MyBookings() {
                           booking.reviewed ? "bg-slate-600 hover:bg-slate-700" : "bg-yellow-600 hover:bg-yellow-700"
                         )}
                         onClick={() => openReviewModal(booking)}
-                        disabled={booking.reviewed}
+                        disabled={booking.reviewed || submitReview.isPending}
                       >
-                        {booking.reviewed ? "Already Reviewed" : "Leave Review"}
+                        {booking.reviewed ? "Already Reviewed" : submitReview.isPending ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            Submitting...
+                          </>
+                        ) : (
+                          "Leave Review"
+                        )}
                       </Button>
                     )}
                   </div>

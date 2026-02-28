@@ -1,6 +1,6 @@
 // src/pages/shared/Chat.tsx
 import { useParams, useNavigate } from "react-router-dom";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import io from "socket.io-client";
 import type { Socket } from "socket.io-client";
@@ -23,6 +23,7 @@ import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
+import debounce from "lodash/debounce";
 
 // ── Types ────────────────────────────────────────────────────────────────
 
@@ -37,7 +38,7 @@ type Message = {
   file_name?: string | null;
   read_at?: string | null;
   created_at: string;
-  booking_id?: string | null; // optional
+  booking_id?: string | null;
 };
 
 type UserProfile = {
@@ -52,8 +53,6 @@ const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
 
 let socket: Socket | null = null;
 
-// ────────────────────────────────────────────────────────────────────────
-
 export default function Chat() {
   const { sellerId: otherUserId } = useParams<{ sellerId: string }>();
   const { user } = useAuth();
@@ -61,6 +60,7 @@ export default function Chat() {
   const navigate = useNavigate();
   const bottomRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
 
   const [messageText, setMessageText] = useState("");
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
@@ -69,6 +69,7 @@ export default function Chat() {
   const [hasConversationStarted, setHasConversationStarted] = useState<boolean | null>(null);
   const [loadingAccess, setLoadingAccess] = useState(true);
   const [isTyping, setIsTyping] = useState(false);
+  const [otherUserTyping, setOtherUserTyping] = useState(false);
 
   if (!otherUserId || !user?.id) {
     return (
@@ -101,6 +102,7 @@ export default function Chat() {
     socket = io(SOCKET_URL, {
       query: { token },
       reconnection: true,
+      reconnectionAttempts: 5,
       transports: ["websocket"],
     });
 
@@ -108,21 +110,16 @@ export default function Chat() {
       console.log("Socket connected");
     });
 
-    socket.on("connected", (data) => {
-      console.log("Server says:", data.message);
-    });
-
     socket.on("new_message", (msg: Message) => {
-      queryClient.setQueryData<Message[]>(
-        ["messages", user.id, otherUserId],
-        (old = []) => {
-          if (old.some((m) => m.id === msg.id)) return old;
-          return [...old, msg];
-        }
-      );
+      if (msg.receiver_id !== user.id && msg.sender_id !== otherUserId) return;
+
+      queryClient.setQueryData<Message[]>(["messages", user.id, otherUserId], (old = []) => {
+        if (old.some((m) => m.id === msg.id)) return old;
+        return [...old, msg];
+      });
+
       bottomRef.current?.scrollIntoView({ behavior: "smooth" });
 
-      // Auto-mark as read if for current user
       if (msg.receiver_id === user.id && !msg.read_at) {
         socket?.emit("mark_read", {
           message_id: msg.id,
@@ -132,13 +129,18 @@ export default function Chat() {
     });
 
     socket.on("messages_read", (data: { message_id: string }) => {
-      queryClient.setQueryData<Message[]>(
-        ["messages", user.id, otherUserId],
-        (old = []) =>
-          old.map((m) =>
-            m.id === data.message_id ? { ...m, read_at: new Date().toISOString() } : m
-          )
+      queryClient.setQueryData<Message[]>(["messages", user.id, otherUserId], (old = []) =>
+        old.map((m) =>
+          m.id === data.message_id ? { ...m, read_at: new Date().toISOString() } : m
+        )
       );
+    });
+
+    socket.on("typing", (data: { sender_id: string }) => {
+      if (data.sender_id === otherUserId) {
+        setOtherUserTyping(true);
+        setTimeout(() => setOtherUserTyping(false), 3000);
+      }
     });
 
     socket.on("notification", (notif: { content: string }) => {
@@ -330,6 +332,21 @@ export default function Chat() {
 
   const handleSend = () => sendMessageMutation.mutate();
 
+  // ── Typing indicator (debounced) ───────────────────────────────────────
+  const emitTyping = useCallback(
+    debounce(() => {
+      if (socket?.connected && messageText.trim()) {
+        socket.emit("typing", { receiver_id: otherUserId });
+      }
+    }, 500),
+    [messageText, otherUserId]
+  );
+
+  useEffect(() => {
+    emitTyping();
+    return () => emitTyping.cancel();
+  }, [messageText, emitTyping]);
+
   // ── Loading / Access states ─────────────────────────────────────────────
   if (userLoading || loadingAccess || messagesLoading || !otherUser) {
     return (
@@ -359,7 +376,7 @@ export default function Chat() {
           <AlertCircle className="h-20 w-20 mx-auto text-yellow-500" />
           <h1 className="text-3xl font-bold">Cannot Start Conversation</h1>
           <p className="text-lg text-slate-300">
-            Sellers can only reply to messages that buyers have started.
+            Sellers can only reply to messages started by buyers.
           </p>
           <p className="text-slate-400">
             If you received a message from this buyer, it will appear in your inbox.
@@ -392,7 +409,7 @@ export default function Chat() {
             <h2 className="font-semibold text-white">{otherUser.full_name || "User"}</h2>
             <p className="text-sm text-slate-400">
               {otherUser.role === "seller" ? "Seller" : "Buyer"} • Direct Message
-              {isTyping && <span className="ml-2 text-blue-400 animate-pulse">typing...</span>}
+              {otherUserTyping && <span className="ml-2 text-blue-400 animate-pulse">typing...</span>}
             </p>
           </div>
         </div>

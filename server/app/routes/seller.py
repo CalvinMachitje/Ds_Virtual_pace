@@ -3,6 +3,10 @@ from asyncio.log import logger
 from functools import wraps
 from flask import Blueprint, app, app, request, jsonify, current_app
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_limiter import Limiter
+import flask_limiter
+from postgrest import APIError
+import postgrest
 from app.services.supabase_service import supabase
 from datetime import datetime, timedelta
 from werkzeug.utils import secure_filename
@@ -521,65 +525,118 @@ def update_booking_status(id):
         return jsonify({"error": "Failed to update booking status"}), 500
 
 
+
 # ────────────────────────────────────────────────
-# GET /api/seller/conversations
-# List seller conversations (bookings + last message + unread)
+# GET /api/seller/profile
+# Get the current authenticated seller's own profile (full details)
+# Includes rating & review count
 # ────────────────────────────────────────────────
-@bp.route("/conversations", methods=["GET"])
+@bp.route("/profile", methods=["GET"])
 @jwt_required()
-def seller_conversations():
+def get_seller_profile():
     seller_id = get_jwt_identity()
 
     try:
-        bookings_res = supabase.table("bookings")\
-            .select("""
-                id, status, start_time,
-                buyer:buyer_id (id, full_name, avatar_url)
-            """)\
-            .eq("seller_id", seller_id)\
-            .order("start_time", desc=True)\
+        # Fetch profile
+        profile_res = supabase.table("profiles")\
+            .select("id, full_name, phone, email, role, avatar_url, bio, created_at, updated_at")\
+            .eq("id", seller_id)\
+            .maybe_single().execute()
+
+        if not profile_res.data:
+            return jsonify({"error": "Profile not found"}), 404
+
+        profile = profile_res.data
+
+        # Get rating & review count
+        reviews_res = supabase.table("reviews")\
+            .select("rating")\
+            .eq("reviewed_id", seller_id)\
             .execute()
 
-        conversations = []
-        for b in (bookings_res.data or []):
-            last_msg_res = supabase.table("messages")\
-                .select("content, created_at")\
-                .eq("booking_id", b["id"])\
-                .order("created_at", desc=True)\
-                .limit(1).maybe_single().execute()
+        review_count = len(reviews_res.data or [])
+        avg_rating = sum(r["rating"] for r in (reviews_res.data or [])) / review_count if review_count else 0.0
 
-            last_msg = last_msg_res.data or {}
-
-            unread_res = supabase.table("messages")\
-                .select("id", count="exact")\
-                .eq("booking_id", b["id"])\
-                .eq("receiver_id", seller_id)\
-                .is_("read_at", None)\
-                .execute()
-
-            conversations.append({
-                "id": b["id"],
-                "client": {
-                    "id": b["buyer"]["id"],
-                    "name": b["buyer"]["full_name"] or "Client",
-                    "avatar": b["buyer"]["avatar_url"]
-                },
-                "last_message": last_msg.get("content", "New booking request"),
-                "last_message_time": last_msg.get("created_at") or b["start_time"],
-                "unread_count": unread_res.count or 0,
-                "status": b["status"]
-            })
-
-        return jsonify(conversations), 200
+        return jsonify({
+            **profile,
+            "average_rating": round(avg_rating, 1),
+            "review_count": review_count
+        }), 200
 
     except Exception as e:
-        current_app.logger.error(f"Seller conversations error (seller {seller_id}): {str(e)}")
-        return jsonify({"error": "Failed to load conversations"}), 500
+        current_app.logger.exception(f"Seller profile fetch error (seller {seller_id})")
+        return jsonify({"error": "Failed to load profile"}), 500
+
+
+# ────────────────────────────────────────────────
+# PATCH /api/seller/profile
+# Allowed fields: full_name, phone, bio, avatar_url
+# ────────────────────────────────────────────────
+@bp.route("/profile", methods=["PATCH"])
+@jwt_required()
+def update_seller_profile():
+    seller_id = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+
+    # Only allow specific fields
+    allowed_fields = ["full_name", "phone", "bio", "avatar_url"]
+    update_data = {k: v for k, v in data.items() if k in allowed_fields and v is not None}
+
+    if not update_data:
+        return jsonify({"error": "No valid fields to update"}), 400
+
+    # Basic validation
+    if "full_name" in update_data:
+        name = (update_data["full_name"] or "").strip()
+        if len(name) < 2 or len(name) > 100:
+            return jsonify({"error": "Full name must be 2–100 characters"}), 400
+        update_data["full_name"] = name
+
+    if "phone" in update_data:
+        phone = (update_data["phone"] or "").strip()
+        update_data["phone"] = phone if phone else None
+
+    if "bio" in update_data:
+        bio = (update_data["bio"] or "").strip()
+        if len(bio) > 1000:
+            return jsonify({"error": "Bio cannot exceed 1000 characters"}), 400
+        update_data["bio"] = bio if bio else None
+
+    try:
+        # Update profile
+        res = supabase.table("profiles")\
+            .update({**update_data, "updated_at": "now()"})\
+            .eq("id", seller_id)\
+            .execute()
+
+        if not res.data:
+            return jsonify({"error": "Profile not found or update failed"}), 404
+
+        updated_profile = res.data[0]
+
+        current_app.logger.info(f"Seller {seller_id} updated profile fields: {list(update_data.keys())}")
+
+        return jsonify({
+            "message": "Profile updated successfully",
+            "profile": {
+                "id": updated_profile["id"],
+                "full_name": updated_profile["full_name"],
+                "phone": updated_profile["phone"],
+                "email": updated_profile["email"],
+                "role": updated_profile["role"],
+                "avatar_url": updated_profile["avatar_url"],
+                "bio": updated_profile["bio"],
+                "updated_at": updated_profile["updated_at"]
+            }
+        }), 200
+
+    except Exception as e:
+        current_app.logger.exception(f"Seller profile update error (seller {seller_id})")
+        return jsonify({"error": "Failed to update profile"}), 500
 
 
 # ────────────────────────────────────────────────
 # GET /api/seller/verification
-# Get current seller verification status
 # ────────────────────────────────────────────────
 @bp.route("/verification", methods=["GET"])
 @jwt_required()
@@ -587,19 +644,103 @@ def get_verification():
     seller_id = get_jwt_identity()
 
     try:
+        # Execute the query
         res = supabase.table("verifications")\
-            .select("id, status, evidence_urls, submitted_at, rejection_reason")\
+            .select("id, status, evidence_urls, submitted_at, rejection_reason, reviewed_by, reviewed_at")\
             .eq("seller_id", seller_id)\
             .order("submitted_at", desc=True)\
             .limit(1)\
-            .maybe_single().execute()
+            .maybe_single()\
+            .execute()
 
-        return jsonify(res.data or None), 200
+        # Safety check: if res is None or malformed → treat as no verification
+        if res is None:
+            current_app.logger.warning(f"Supabase returned None for verification query (seller {seller_id})")
+            return jsonify(None), 200
 
-    except Exception as e:
-        current_app.logger.error(f"Verification fetch error (seller {seller_id}): {str(e)}")
+        # Normal case: check for no-content (204) or empty data
+        if hasattr(res, 'code') and res.code == "204" or not getattr(res, 'data', None):
+            return jsonify(None), 200
+
+        # Success: return the data
+        return jsonify(res.data), 200
+
+    except postgrest.exceptions.APIError as api_err:
+        if api_err.code == "204":
+            return jsonify(None), 200
+        current_app.logger.exception(f"PostgREST API error fetching verification for {seller_id}")
         return jsonify({"error": "Failed to load verification status"}), 500
 
+    except Exception as e:
+        current_app.logger.exception(f"Verification fetch failed for seller {seller_id}")
+        return jsonify({
+            "error": "Internal server error while loading verification",
+            "details": str(e) if current_app.debug else None
+        }), 500
+
+@bp.route("/verification", methods=["POST"])
+@jwt_required()
+def submit_verification():
+    seller_id = get_jwt_identity()
+
+    if "files" not in request.files:
+        return jsonify({"error": "No files provided"}), 400
+
+    files = request.files.getlist("files")
+    if not files:
+        return jsonify({"error": "No files selected"}), 400
+
+    evidence_urls = []
+    bucket = "verifications"
+
+    try:
+        for file in files:
+            if file.filename == "" or not allowed_file(file.filename):
+                continue
+
+            filename = secure_filename(f"{seller_id}_{uuid.uuid4().hex}_{file.filename}")
+            path = f"{seller_id}/{filename}"
+
+            # Upload to Supabase Storage
+            upload_res = supabase.storage.from_(bucket).upload(
+                path=path,
+                file=file.read(),
+                file_options={"cacheControl": "3600", "upsert": "true"}
+            )
+
+            if upload_res.status_code not in (200, 201):
+                logger.warning(f"Storage upload failed: {upload_res}")
+                continue
+
+            public_url = supabase.storage.from_(bucket).get_public_url(path)
+            evidence_urls.append(public_url)
+
+        if not evidence_urls:
+            return jsonify({"error": "No valid files uploaded"}), 400
+
+        # Create verification record
+        verification = {
+            "seller_id": seller_id,
+            "status": "pending",
+            "evidence_urls": evidence_urls,
+            "submitted_at": "now()",
+            "created_at": "now()",
+            "updated_at": "now()"
+        }
+
+        res = supabase.table("verifications").insert(verification).execute()
+
+        if not res.data:
+            return jsonify({"error": "Failed to submit verification"}), 500
+
+        return jsonify({
+            "message": "Verification submitted successfully",
+            "verification_id": res.data[0]["id"]
+        }), 201
+
+    except Exception as e:
+        logger.exception(f"Verification submission failed for seller {seller_id}")
+        return jsonify({"error": "Failed to submit verification"}), 500
 
 # ────────────────────────────────────────────────
 # PATCH /api/seller/bookings/:id/cancel
@@ -696,107 +837,6 @@ def request_payout():
         current_app.logger.error(f"Payout request error (seller {seller_id}): {str(e)}")
         return jsonify({"error": "Failed to request payout"}), 500
 
-# ────────────────────────────────────────────────
-# GET /api/seller/profile
-# Get the current authenticated seller's own profile (full details)
-# ────────────────────────────────────────────────
-@bp.route("/profile", methods=["GET"])
-@jwt_required()
-def get_seller_profile():
-    seller_id = get_jwt_identity()
-
-    try:
-        # Fetch profile
-        profile_res = supabase.table("profiles")\
-            .select("id, full_name, phone, email, role, avatar_url, bio, created_at, updated_at")\
-            .eq("id", seller_id)\
-            .maybe_single().execute()
-
-        if not profile_res.data:
-            return jsonify({"error": "Profile not found"}), 404
-
-        profile = profile_res.data
-
-        # Get rating & review count
-        reviews_res = supabase.table("reviews")\
-            .select("rating")\
-            .eq("reviewed_id", seller_id)\
-            .execute()
-
-        review_count = len(reviews_res.data or [])
-        avg_rating = sum(r["rating"] for r in (reviews_res.data or [])) / review_count if review_count else 0.0
-
-        return jsonify({
-            **profile,
-            "average_rating": round(avg_rating, 1),
-            "review_count": review_count
-        }), 200
-
-    except Exception as e:
-        current_app.logger.error(f"Seller profile fetch error (seller {seller_id}): {str(e)}")
-        return jsonify({"error": "Failed to load profile"}), 500
-
-
-# ────────────────────────────────────────────────
-# PATCH /api/seller/profile
-# Update the current authenticated seller's own profile
-# Allowed fields: full_name, phone, bio, avatar_url
-# ────────────────────────────────────────────────
-@bp.route("/profile", methods=["PATCH"])
-@jwt_required()
-def update_seller_profile():
-    seller_id = get_jwt_identity()
-    data = request.get_json(silent=True) or {}
-
-    # Only allow specific fields
-    allowed_fields = ["full_name", "phone", "bio", "avatar_url"]
-    update_data = {k: v for k, v in data.items() if k in allowed_fields and v is not None}
-
-    if not update_data:
-        return jsonify({"error": "No valid fields to update"}), 400
-
-    # Basic validation
-    if "full_name" in update_data and (len(update_data["full_name"]) < 2 or len(update_data["full_name"]) > 100):
-        return jsonify({"error": "Full name must be 2–100 characters"}), 400
-
-    if "phone" in update_data and update_data["phone"] and not update_data["phone"].strip():
-        update_data["phone"] = None
-
-    if "bio" in update_data and update_data["bio"] and len(update_data["bio"]) > 1000:
-        return jsonify({"error": "Bio cannot exceed 1000 characters"}), 400
-
-    try:
-        # Update profile
-        res = supabase.table("profiles")\
-            .update({**update_data, "updated_at": "now()"})\
-            .eq("id", seller_id)\
-            .execute()
-
-        if not res.data:
-            return jsonify({"error": "Profile not found or update failed"}), 404
-
-        updated_profile = res.data[0]
-
-        # Optional: log the update
-        current_app.logger.info(f"Seller {seller_id} updated profile fields: {list(update_data.keys())}")
-
-        return jsonify({
-            "message": "Profile updated successfully",
-            "profile": {
-                "id": updated_profile["id"],
-                "full_name": updated_profile["full_name"],
-                "phone": updated_profile["phone"],
-                "email": updated_profile["email"],
-                "role": updated_profile["role"],
-                "avatar_url": updated_profile["avatar_url"],
-                "bio": updated_profile["bio"],
-                "updated_at": updated_profile["updated_at"]
-            }
-        }), 200
-
-    except Exception as e:
-        current_app.logger.error(f"Seller profile update error (seller {seller_id}): {str(e)}")
-        return jsonify({"error": "Failed to update profile"}), 500
     
 # =============================================================================
 # AVAILABILITY – Seller manages own slots
@@ -911,7 +951,7 @@ def get_my_offers():
     user_id = get_jwt_identity()
     try:
         offers = supabase.table("service_offers")\
-            .select("*, service_requests!request_id (title, description, budget, category)")\
+            .select("*, job_requests!request_id (title, description, budget, category)")\
             .eq("seller_id", user_id)\
             .eq("status", "pending")\
             .order("created_at", desc=True)\
@@ -994,3 +1034,190 @@ def respond_to_offer(offer_id):
     except Exception as e:
         logger.error(f"Respond to offer failed: {str(e)}")
         return jsonify({"error": "Server error"}), 500
+    
+# ────────────────────────────────────────────────
+# GET /api/seller/conversations
+# List all conversations for the authenticated seller
+# ────────────────────────────────────────────────
+@bp.route("/conversations", methods=["GET"])
+@jwt_required()
+def get_seller_conversations():
+    seller_id = get_jwt_identity()
+
+    try:
+        res = supabase.table("messages")\
+            .select("""
+                id,
+                sender_id,
+                receiver_id,
+                content,
+                created_at,
+                sender:profiles!sender_id (full_name, avatar_url),
+                receiver:profiles!receiver_id (full_name, avatar_url)
+            """)\
+            .or_(f"sender_id.eq.{seller_id},receiver_id.eq.{seller_id}")\
+            .order("created_at", desc=True)\
+            .execute()
+
+        conversations = []
+        seen = set()
+
+        for msg in (res.data or []):
+            other_id = msg["sender_id"] if msg["receiver_id"] == seller_id else msg["receiver_id"]
+            if other_id in seen:
+                continue
+            seen.add(other_id)
+
+            other_profile = msg["sender"] if msg["receiver_id"] == seller_id else msg["receiver"]
+            conversations.append({
+                "id": other_id,
+                "client_name": other_profile["full_name"] or "Unknown",
+                "client_avatar": other_profile["avatar_url"],
+                "last_message": msg["content"],
+                "last_message_time": msg["created_at"],
+                "unread_count": 0,  # TODO: implement unread count logic
+                "status": "active"   # TODO: derive from booking status if linked
+            })
+
+        return jsonify(conversations), 200
+
+    except Exception as e:
+        logger.exception(f"Seller conversations fetch failed for {seller_id}")
+        return jsonify({"error": "Failed to load conversations"}), 500
+
+
+# ────────────────────────────────────────────────
+# GET /api/seller/messages/conversation/<conversation_id>
+# Get message history for a specific seller-buyer conversation
+# ────────────────────────────────────────────────
+@bp.route("/messages/conversation/<string:conversation_id>", methods=["GET"])
+@jwt_required()
+def get_seller_chat_history(conversation_id):
+    seller_id = get_jwt_identity()
+    limit = request.args.get("limit", 50, type=int)
+    offset = request.args.get("offset", 0, type=int)
+
+    try:
+        # Verify seller is part of this conversation
+        participant = supabase.table("messages")\
+            .select("id")\
+            .or_(f"sender_id.eq.{seller_id},receiver_id.eq.{seller_id}")\
+            .eq("receiver_id", conversation_id)\
+            .limit(1).execute()
+
+        if participant is None or not participant.data:
+            return jsonify({"error": "Conversation not found or unauthorized"}), 403
+
+        # Fetch messages
+        res = supabase.table("messages")\
+            .select("""
+                id, content, created_at, sender_id, receiver_id, is_file, file_url, mime_type, file_name, read_at,
+                sender:profiles!sender_id (full_name, avatar_url),
+                receiver:profiles!receiver_id (full_name, avatar_url)
+            """)\
+            .or_(f"sender_id.eq.{seller_id},receiver_id.eq.{seller_id}")\
+            .eq("receiver_id", conversation_id)\
+            .order("created_at", desc=False)\
+            .range(offset, offset + limit - 1).execute()
+
+        formatted = []
+        for msg in (res.data or []):
+            formatted.append({
+                "id": msg["id"],
+                "content": msg["content"],
+                "created_at": msg["created_at"],
+                "sender_id": msg["sender_id"],
+                "receiver_id": msg["receiver_id"],
+                "is_file": msg["is_file"],
+                "file_url": msg["file_url"],
+                "mime_type": msg["mime_type"],
+                "file_name": msg["file_name"],
+                "read_at": msg["read_at"],
+                "sender": {
+                    "id": msg["sender_id"],
+                    "name": msg["sender"]["full_name"] if msg["sender"] else "Unknown",
+                    "avatar": msg["sender"]["avatar_url"]
+                },
+                "receiver": {
+                    "id": msg["receiver_id"],
+                    "name": msg["receiver"]["full_name"] if msg["receiver"] else "Unknown",
+                    "avatar": msg["receiver"]["avatar_url"]
+                },
+                "is_sent_by_me": msg["sender_id"] == seller_id
+            })
+
+        return jsonify(formatted), 200
+
+    except Exception as e:
+        logger.exception(f"Seller chat history error for {conversation_id}")
+        return jsonify({"error": "Failed to load messages"}), 500
+    
+
+# ────────────────────────────────────────────────
+# GET /api/seller/<user_id>/reviews   
+# Public endpoint: Get all reviews for a user (seller or buyer)
+@bp.route("/profile/<string:user_id>/reviews", methods=["GET"])
+def get_profile_reviews(user_id: str):
+    """
+    Public endpoint: Get reviews for any user (usually sellers)
+    Uses explicit join hint to avoid schema cache issues
+    """
+    try:
+        # Use explicit !reviewer_id hint to force relationship
+        res = supabase.table("reviews")\
+            .select("""
+                id,
+                rating,
+                comment,
+                created_at,
+                reviewer:profiles!reviews_reviewer_id_fkey (full_name, avatar_url)
+            """)\
+            .eq("reviewed_id", user_id)\
+            .order("created_at", desc=True)\
+            .execute()
+
+        reviews = res.data or []
+
+        # Fallback if reviewer missing (safety)
+        for review in reviews:
+            reviewer = review.get("reviewer") or {}
+            if not reviewer:
+                review["reviewer"] = {
+                    "full_name": "Anonymous",
+                    "avatar_url": None
+                }
+
+        # Calculate average rating
+        avg_rating = None
+        if reviews:
+            avg_rating = round(sum(r["rating"] for r in reviews) / len(reviews), 1)
+
+        return jsonify({
+            "reviews": reviews,
+            "average_rating": avg_rating,
+            "total_reviews": len(reviews)
+        }), 200
+
+    except postgrest.exceptions.APIError as e:
+        if e.code == "PGRST200":
+            # Fallback to non-joined query if relationship still broken
+            logger.warning("Relationship hint failed - falling back to basic query")
+            fallback = supabase.table("reviews")\
+                .select("id, rating, comment, created_at")\
+                .eq("reviewed_id", user_id)\
+                .order("created_at", desc=True)\
+                .execute()
+
+            return jsonify({
+                "reviews": fallback.data or [],
+                "average_rating": None,
+                "total_reviews": len(fallback.data or []),
+                "warning": "Reviewer details unavailable - schema issue"
+            }), 200
+
+        logger.exception(f"Reviews API error for user {user_id}")
+        return jsonify({"error": "Failed to load reviews"}), 500
+
+    except Exception as e:
+        logger.exception(f"Reviews fetch failed for user {user_id}")
+        return jsonify({"error": "Internal error loading reviews"}), 500

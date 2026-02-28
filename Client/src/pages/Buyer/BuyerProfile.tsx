@@ -1,6 +1,25 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/Buyer/BuyerProfile.tsx
 import { useState, useEffect, useRef } from "react";
-import { ArrowLeft, MoreVertical, MessageSquare, Bookmark, Star, CheckCircle, Edit, Upload, X, Plus, Save, Clock, DollarSign, List, CreditCard } from "lucide-react";
+import {
+  ArrowLeft,
+  MoreVertical,
+  MessageSquare,
+  Bookmark,
+  Star,
+  CheckCircle,
+  Edit,
+  Upload,
+  X,
+  Plus,
+  Save,
+  Clock,
+  DollarSign,
+  List,
+  CreditCard,
+  AlertCircle,
+  Loader2,
+} from "lucide-react";
 import { Link, useParams, useNavigate } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -29,11 +48,11 @@ import {
 
 type Profile = {
   id: string;
-  full_name: string;
+  full_name?: string | null;
   role: "buyer" | "seller";
-  bio?: string;
-  avatar_url?: string;
-  phone?: string;
+  bio?: string | null;
+  avatar_url?: string | null;
+  phone?: string | null;
   created_at: string;
   updated_at: string;
   is_verified?: boolean;
@@ -42,8 +61,8 @@ type Profile = {
 
 type BookingSummary = {
   id: string;
-  gig_title: string;
-  seller_name: string;
+  gig_title?: string;
+  seller_name?: string;
   status: string;
   price: number;
   date: string;
@@ -89,7 +108,7 @@ export default function BuyerProfile() {
   const [openInterestPopover, setOpenInterestPopover] = useState(false);
   const [interestInput, setInterestInput] = useState("");
 
-  const isOwnProfile = user?.id === profile?.id;
+  const isOwnProfile = user?.id === id;
 
   useEffect(() => {
     if (!id) {
@@ -104,14 +123,14 @@ export default function BuyerProfile() {
         setError(null);
 
         // 1. Fetch profile
-        const profileRes = await fetch(`/api/profile/${id}`, {
+        const profileRes = await fetch(`/api/buyer/profile/${id}`, {
           headers: {
             Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
           },
         });
 
         if (!profileRes.ok) {
-          const errData = await profileRes.json();
+          const errData = await profileRes.json().catch(() => ({}));
           throw new Error(errData.error || "Profile not found");
         }
 
@@ -127,36 +146,35 @@ export default function BuyerProfile() {
           });
         }
 
-        // 2. Fetch recent bookings
-        const bookingsRes = await fetch(`/api/profile/${id}/bookings?limit=5`, {
+        // 2. Fetch recent bookings (limit 5)
+        const bookingsRes = await fetch(`/api/buyer/profile/${id}/bookings?limit=5`, {
           headers: {
             Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
           },
         });
 
-        if (!bookingsRes.ok) {
-          const errData = await bookingsRes.json();
-          throw new Error(errData.error || "Failed to load bookings");
+        if (bookingsRes.ok) {
+          const bookingsData = await bookingsRes.json();
+          const formattedBookings = (bookingsData || []).map((b: any) => ({
+            id: b.id,
+            gig_title: b.gig?.title || "Untitled Gig",
+            seller_name: b.seller?.full_name || "Unknown Seller",
+            status: b.status || "unknown",
+            price: b.price || 0,
+            date: b.created_at ? new Date(b.created_at).toLocaleDateString("en-ZA") : "—",
+          }));
+
+          setRecentBookings(formattedBookings);
+
+          // Calculate stats
+          const totalSpent = formattedBookings.reduce((sum, b) => sum + b.price, 0);
+          const completed = formattedBookings.filter(b => b.status === "completed").length;
+          const active = formattedBookings.filter(b => !["completed", "cancelled"].includes(b.status)).length;
+
+          setStats({ totalSpent, bookingsCompleted: completed, activeBookings: active });
+        } else {
+          console.warn("Bookings fetch failed, continuing without");
         }
-
-        const bookingsData = await bookingsRes.json();
-        const formattedBookings = bookingsData.map((b: any) => ({
-          id: b.id,
-          gig_title: b.gig?.title || "Untitled Gig",
-          seller_name: b.seller?.full_name || "Unknown",
-          status: b.status,
-          price: b.price,
-          date: new Date(b.created_at).toLocaleDateString("en-ZA"),
-        }));
-
-        setRecentBookings(formattedBookings);
-
-        // 3. Calculate stats
-        const totalSpent = formattedBookings.reduce((sum, b) => sum + (b.price || 0), 0);
-        const completed = formattedBookings.filter(b => b.status === "completed").length;
-        const active = formattedBookings.filter(b => b.status !== "completed").length;
-
-        setStats({ totalSpent, bookingsCompleted: completed, activeBookings: active });
       } catch (err: any) {
         console.error("Profile fetch error:", err);
         setError(err.message || "Failed to load profile");
@@ -199,7 +217,7 @@ export default function BuyerProfile() {
       const formData = new FormData();
       formData.append("avatar", file);
 
-      const res = await fetch("/api/profile/avatar", {
+      const res = await fetch("/api/buyer/profile/avatar", {
         method: "POST",
         headers: {
           Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
@@ -214,7 +232,6 @@ export default function BuyerProfile() {
 
       const { publicUrl } = await res.json();
 
-      // Update local state
       setProfile(prev => prev ? { ...prev, avatar_url: publicUrl } : null);
       toast.success("Avatar updated successfully!");
     } catch (err: any) {
@@ -233,6 +250,7 @@ export default function BuyerProfile() {
       setEditForm(prev => ({ ...prev, interests: [...current, interest.trim()] }));
     }
     setInterestInput("");
+    setOpenInterestPopover(false);
   };
 
   const removeInterest = (interest: string) => {
@@ -246,14 +264,14 @@ export default function BuyerProfile() {
     if (!user?.id || !profile) return;
 
     try {
-      const res = await fetch(`/api/profile/${user.id}`, {
+      const res = await fetch(`/api/buyer/profile/${user.id}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
         },
         body: JSON.stringify({
-          full_name: editForm.full_name?.trim() || profile.full_name,
+          full_name: editForm.full_name?.trim(),
           bio: editForm.bio?.trim(),
           phone: editForm.phone?.trim(),
           interests: editForm.interests || [],
@@ -282,7 +300,7 @@ export default function BuyerProfile() {
 
   const handleMessage = () => {
     if (!profile?.id) return;
-    navigate(`/chat/new?with=${profile.id}`);
+    navigate(`/chat/${profile.id}`);
   };
 
   const handleBook = () => {
@@ -317,7 +335,8 @@ export default function BuyerProfile() {
   if (error || !profile) {
     return (
       <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 text-center">
-        <h2 className="text-3xl font-bold text-red-400 mb-4">Profile Not Found</h2>
+        <AlertCircle className="h-16 w-16 text-red-500 mb-4" />
+        <h2 className="text-3xl font-bold text-white mb-4">Profile Not Found</h2>
         <p className="text-slate-300 mb-8 max-w-md">{error || "This profile doesn't exist or is not public."}</p>
         <Button onClick={() => navigate(-1)} className="bg-blue-600 hover:bg-blue-700">
           Go Back
@@ -346,16 +365,14 @@ export default function BuyerProfile() {
           </button>
 
           <h1 className="text-xl font-semibold text-white">
-            {isOwnProfile ? "My Profile" : `${profile.full_name}'s Profile`}
+            {isOwnProfile ? "My Profile" : `${profile.full_name || "Buyer"}'s Profile`}
           </h1>
 
           <div className="flex items-center gap-2">
             {isOwnProfile && (
-              <>
-                <Button variant="ghost" size="icon" onClick={handleEditToggle}>
-                  {isEditing ? <X className="h-5 w-5 text-white" /> : <Edit className="h-5 w-5 text-white" />}
-                </Button>
-              </>
+              <Button variant="ghost" size="icon" onClick={handleEditToggle}>
+                {isEditing ? <X className="h-5 w-5 text-white" /> : <Edit className="h-5 w-5 text-white" />}
+              </Button>
             )}
             <button className="p-2 -mr-2">
               <MoreVertical className="h-6 w-6 text-white" />
@@ -367,9 +384,9 @@ export default function BuyerProfile() {
         <section className="flex flex-col items-center mb-10">
           <div className="relative mb-6 group">
             <Avatar className="h-32 w-32 md:h-40 md:w-40 border-4 border-slate-700 ring-2 ring-blue-500/20">
-              <AvatarImage src={profile.avatar_url} alt={profile.full_name} />
+              <AvatarImage src={profile.avatar_url ?? undefined} alt={profile.full_name ?? ""} />
               <AvatarFallback className="bg-slate-800 text-2xl font-bold">
-                {profile.full_name?.[0] || "?"}
+                {profile.full_name?.[0] ?? "?"}
               </AvatarFallback>
             </Avatar>
 
@@ -391,7 +408,7 @@ export default function BuyerProfile() {
                 />
                 {uploadingAvatar && (
                   <div className="absolute inset-0 flex items-center justify-center bg-black/60 rounded-full">
-                    <div className="animate-spin h-8 w-8 border-4 border-blue-500 rounded-full border-t-transparent" />
+                    <Loader2 className="h-8 w-8 text-white animate-spin" />
                   </div>
                 )}
               </>
@@ -482,10 +499,7 @@ export default function BuyerProfile() {
                           ).map((interest) => (
                             <CommandItem
                               key={interest}
-                              onSelect={() => {
-                                addInterest(interest);
-                                setOpenInterestPopover(false);
-                              }}
+                              onSelect={() => addInterest(interest)}
                               className="cursor-pointer hover:bg-slate-800"
                             >
                               {interest}
@@ -495,10 +509,7 @@ export default function BuyerProfile() {
                         {interestInput.trim() && !INTEREST_SUGGESTIONS.includes(interestInput.trim()) && (
                           <CommandGroup>
                             <CommandItem
-                              onSelect={() => {
-                                addInterest(interestInput.trim());
-                                setOpenInterestPopover(false);
-                              }}
+                              onSelect={() => addInterest(interestInput.trim())}
                               className="cursor-pointer hover:bg-slate-800"
                             >
                               Add custom: "{interestInput.trim()}"
@@ -522,7 +533,7 @@ export default function BuyerProfile() {
             </div>
           ) : (
             <>
-              <h2 className="text-4xl font-bold text-white mb-2">{profile.full_name}</h2>
+              <h2 className="text-4xl font-bold text-white mb-2">{profile.full_name || "Buyer"}</h2>
               <p className="text-xl text-slate-300 capitalize mb-4">{profile.role}</p>
 
               <div className="flex flex-wrap gap-4 justify-center">
@@ -588,7 +599,9 @@ export default function BuyerProfile() {
               </div>
             ) : (
               <p className="text-center text-slate-400 py-8 italic">
-                You haven't added any interests yet. Let sellers know what kind of help you're looking for!
+                {isOwnProfile 
+                  ? "You haven't added any interests yet. Let sellers know what kind of help you're looking for!"
+                  : "This buyer hasn't shared any interests yet."}
               </p>
             )}
           </CardContent>
@@ -618,7 +631,9 @@ export default function BuyerProfile() {
               </div>
             ) : (
               <p className="text-center text-slate-400 py-8 italic">
-                No recent bookings yet. Start exploring gigs!
+                {isOwnProfile 
+                  ? "No recent bookings yet. Start exploring gigs!"
+                  : "This buyer has no recent bookings visible."}
               </p>
             )}
           </CardContent>

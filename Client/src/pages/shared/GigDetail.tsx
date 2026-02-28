@@ -22,12 +22,13 @@ import "react-loading-skeleton/dist/skeleton.css";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import NavLayout from "@/components/layout/NavLayout";
 
 type Gig = {
   id: string;
   title: string;
   description: string;
-  price: number;
+  price?: number | null; // ← Allow null/undefined
   category: string;
   seller_id: string;
   seller_name: string;
@@ -82,7 +83,7 @@ export default function GigDetail() {
         },
         body: JSON.stringify({
           gig_id: gig.id,
-          price: gig.price,
+          price: gig.price ?? 0, // Fallback to 0 if null
           service: gig.title,
           note: bookingNote.trim() || undefined,
         }),
@@ -145,132 +146,139 @@ export default function GigDetail() {
     </div>
   );
 
+  // Safe price display: fallback to "Contact for price" if null/undefined
+  const displayPrice = gig.price != null 
+    ? `R${gig.price.toFixed(2)}/hr` 
+    : "Contact for price";
+
   return (
-    <div className="min-h-screen bg-slate-900 p-6">
-      <div className="max-w-4xl mx-auto">
-        <img
-          src={gig.image_url || "/placeholder-gig-large.jpg"}
-          alt={gig.title}
-          className="w-full h-64 md:h-96 object-cover rounded-xl mb-8"
-        />
+    <NavLayout>
+      <div className="min-h-screen bg-slate-900 p-6">
+        <div className="max-w-4xl mx-auto">
+          <img
+            src={gig.image_url || "/placeholder-gig-large.jpg"}
+            alt={gig.title}
+            className="w-full h-64 md:h-96 object-cover rounded-xl mb-8"
+          />
 
-        <h1 className="text-4xl font-bold text-white mb-4">{gig.title}</h1>
-        <Badge variant="secondary" className="mb-6 capitalize">{gig.category.replace(/_/g, " ")}</Badge>
+          <h1 className="text-4xl font-bold text-white mb-4">{gig.title}</h1>
+          <Badge variant="secondary" className="mb-6 capitalize">{gig.category.replace(/_/g, " ")}</Badge>
 
-        <p className="text-slate-300 mb-8 whitespace-pre-line">{gig.description}</p>
+          <p className="text-slate-300 mb-8 whitespace-pre-line">{gig.description}</p>
 
-        {/* Prominent Seller Block */}
-        <div 
-          className="mb-10 p-6 bg-slate-800/70 rounded-2xl border border-slate-700 hover:border-blue-600 transition-all cursor-pointer group shadow-lg"
-          onClick={goToSellerProfile}
-        >
-          <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
-            <div className="relative shrink-0">
-              <Avatar className="h-24 w-24 md:h-28 md:w-28 ring-4 ring-blue-500/20">
-                <AvatarImage src={gig.seller_avatar_url} alt={gig.seller_name} />
-                <AvatarFallback className="text-3xl">{gig.seller_name?.[0] || "?"}</AvatarFallback>
-              </Avatar>
-              {gig.seller_is_verified && (
-                <div className="absolute -bottom-3 -right-3 bg-blue-600 p-2 rounded-full border-4 border-slate-900 shadow-md">
-                  <CheckCircle2 className="h-7 w-7 text-white" />
-                </div>
-              )}
-            </div>
-
-            <div className="flex-1 text-center sm:text-left">
-              <div className="flex items-center justify-center sm:justify-start gap-3 mb-2">
-                <h3 className="text-2xl md:text-3xl font-bold text-white group-hover:text-blue-400 transition-colors">
-                  {gig.seller_name}
-                </h3>
+          {/* Prominent Seller Block */}
+          <div 
+            className="mb-10 p-6 bg-slate-800/70 rounded-2xl border border-slate-700 hover:border-blue-600 transition-all cursor-pointer group shadow-lg"
+            onClick={goToSellerProfile}
+          >
+            <div className="flex flex-col sm:flex-row items-center sm:items-start gap-6">
+              <div className="relative shrink-0">
+                <Avatar className="h-24 w-24 md:h-28 md:w-28 ring-4 ring-blue-500/20">
+                  <AvatarImage src={gig.seller_avatar_url} alt={gig.seller_name} />
+                  <AvatarFallback className="text-3xl">{gig.seller_name?.[0] || "?"}</AvatarFallback>
+                </Avatar>
                 {gig.seller_is_verified && (
-                  <Badge className="bg-blue-600 hover:bg-blue-700 text-white text-sm flex items-center gap-1 px-3 py-1">
-                    <CheckCircle2 className="h-4 w-4" /> Verified Seller
-                  </Badge>
+                  <div className="absolute -bottom-3 -right-3 bg-blue-600 p-2 rounded-full border-4 border-slate-900 shadow-md">
+                    <CheckCircle2 className="h-7 w-7 text-white" />
+                  </div>
                 )}
               </div>
 
-              <div className="flex items-center justify-center sm:justify-start gap-2 mb-4">
-                <Star className="h-5 w-5 text-yellow-400 fill-yellow-400" />
-                <span className="text-xl font-semibold text-white">
-                  {gig.rating.toFixed(1)}
-                </span>
-                <span className="text-slate-400">
-                  ({gig.review_count} {gig.review_count === 1 ? "review" : "reviews"})
-                </span>
-              </div>
+              <div className="flex-1 text-center sm:text-left">
+                <div className="flex items-center justify-center sm:justify-start gap-3 mb-2">
+                  <h3 className="text-2xl md:text-3xl font-bold text-white group-hover:text-blue-400 transition-colors">
+                    {gig.seller_name}
+                  </h3>
+                  {gig.seller_is_verified && (
+                    <Badge className="bg-blue-600 hover:bg-blue-700 text-white text-sm flex items-center gap-1 px-3 py-1">
+                      <CheckCircle2 className="h-4 w-4" /> Verified Seller
+                    </Badge>
+                  )}
+                </div>
 
-              <Button 
-                variant="outline" 
-                className="border-blue-600 text-blue-400 hover:bg-blue-950 hover:text-blue-300 px-6 py-5 text-base font-medium"
-              >
-                View Profile & Portfolio <User className="ml-2 h-5 w-5" />
-              </Button>
+                <div className="flex items-center justify-center sm:justify-start gap-2 mb-4">
+                  <Star className="h-5 w-5 text-yellow-400 fill-yellow-400" />
+                  <span className="text-xl font-semibold text-white">
+                    {gig.rating.toFixed(1)}
+                  </span>
+                  <span className="text-slate-400">
+                    ({gig.review_count} {gig.review_count === 1 ? "review" : "reviews"})
+                  </span>
+                </div>
+
+                <Button 
+                  variant="outline" 
+                  className="border-blue-600 text-blue-400 hover:bg-blue-950 hover:text-blue-300 px-6 py-5 text-base font-medium"
+                >
+                  View Profile & Portfolio <User className="ml-2 h-5 w-5" />
+                </Button>
+              </div>
             </div>
           </div>
-        </div>
 
-        <div className="flex flex-col sm:flex-row gap-4">
-          <Button
-            variant="outline"
-            className="flex-1 border-blue-600 text-blue-400 hover:bg-blue-950"
-            onClick={messageSeller}
-          >
-            <MessageSquare className="mr-2 h-5 w-5" />
-            Message Seller
-          </Button>
+          <div className="flex flex-col sm:flex-row gap-4">
+            <Button
+              variant="outline"
+              className="flex-1 border-blue-600 text-blue-400 hover:bg-blue-950"
+              onClick={messageSeller}
+            >
+              <MessageSquare className="mr-2 h-5 w-5" />
+              Message Seller
+            </Button>
 
-          <Button
-            onClick={() => setShowBookingModal(true)}
-            className="flex-1 bg-emerald-600 hover:bg-emerald-700"
-          >
-            <Calendar className="mr-2 h-5 w-5" />
-            Book Now – R{gig.price.toFixed(2)}/hr
-          </Button>
-        </div>
+            <Button
+              onClick={() => setShowBookingModal(true)}
+              className="flex-1 bg-emerald-600 hover:bg-emerald-700"
+            >
+              <Calendar className="mr-2 h-5 w-5" />
+              Book Now – {displayPrice}
+            </Button>
+          </div>
 
-        {/* Booking Modal */}
-        <Dialog open={showBookingModal} onOpenChange={setShowBookingModal}>
-          <DialogContent className="sm:max-w-md">
-            <DialogHeader>
-              <DialogTitle>Confirm Booking</DialogTitle>
-              <DialogDescription>
-                You're booking <strong>{gig.title}</strong> with <strong>{gig.seller_name}</strong>
-              </DialogDescription>
-            </DialogHeader>
-            <CardContent>
-              <div className="space-y-4 mt-4">
-                <div>
-                  <Label htmlFor="note">Note to seller (optional)</Label>
-                  <Textarea
-                    id="note"
-                    placeholder="Any special requirements or questions?"
-                    value={bookingNote}
-                    onChange={(e) => setBookingNote(e.target.value)}
-                    className="min-h-[100px]"
-                  />
+          {/* Booking Modal */}
+          <Dialog open={showBookingModal} onOpenChange={setShowBookingModal}>
+            <DialogContent className="sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle>Confirm Booking</DialogTitle>
+                <DialogDescription>
+                  You're booking <strong>{gig.title}</strong> with <strong>{gig.seller_name}</strong>
+                </DialogDescription>
+              </DialogHeader>
+              <CardContent>
+                <div className="space-y-4 mt-4">
+                  <div>
+                    <Label htmlFor="note">Note to seller (optional)</Label>
+                    <Textarea
+                      id="note"
+                      placeholder="Any special requirements or questions?"
+                      value={bookingNote}
+                      onChange={(e) => setBookingNote(e.target.value)}
+                      className="min-h-[100px]"
+                    />
+                  </div>
                 </div>
-              </div>
-            </CardContent>
-            <DialogFooter className="sm:justify-between">
-              <Button variant="outline" onClick={() => setShowBookingModal(false)}>Cancel</Button>
-              <Button
-                onClick={() => createBooking.mutate()}
-                disabled={createBooking.isPending}
-                className="bg-emerald-600 hover:bg-emerald-700"
-              >
-                {createBooking.isPending ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Sending Request...
-                  </>
-                ) : (
-                  "Confirm Booking"
-                )}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+              </CardContent>
+              <DialogFooter className="sm:justify-between">
+                <Button variant="outline" onClick={() => setShowBookingModal(false)}>Cancel</Button>
+                <Button
+                  onClick={() => createBooking.mutate()}
+                  disabled={createBooking.isPending}
+                  className="bg-emerald-600 hover:bg-emerald-700"
+                >
+                  {createBooking.isPending ? (
+                    <>
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                      Sending Request...
+                    </>
+                  ) : (
+                    "Confirm Booking"
+                  )}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        </div>
       </div>
-    </div>
+    </NavLayout>
   );
 }

@@ -25,6 +25,8 @@ import Gigs from "./pages/shared/Gigs";
 import GigDetail from "./pages/shared/GigDetail";
 import BuyerProfile from "./pages/Buyer/BuyerProfile";
 import Settings from "./pages/shared/Settings";
+import MyTickets from "@/pages/support/MyTickets";
+import TicketDetail from "@/pages/support/TicketDetail";
 
 // Dashboard & Marketplace Pages
 import BuyerDashboard from "./pages/Buyer/BuyerDashboard";
@@ -184,6 +186,8 @@ const App = () => {
               <Route path="/chat/:id" element={<Chat />} />
               <Route path="/verification/:id" element={<VerificationStatus />} />
               <Route path="/review-booking/:id" element={<ReviewBooking />} />
+              <Route path="/support" element={<MyTickets />} />
+              <Route path="/support/:ticketId" element={<TicketDetail />} />
 
               {/* Buyer-only */}
               <Route element={<RequireRole allowedRoles={["buyer"]}><Outlet /></RequireRole>}>
@@ -203,7 +207,7 @@ const App = () => {
               </Route>
 
               {/* Admin-only – using separate layout if needed */}
-              <Route element={<RequireRole allowedRoles={["admin"]}><AdminLayout /></RequireRole>}>
+              <Route element={<RequireRole allowedRoles={["admin"]}><Outlet /></RequireRole>}>
                 <Route path="/admin" element={<AdminDashboard />} />
                 <Route path="/admin/users" element={<UsersAdmin />} />
                 <Route path="/admin/gigs" element={<GigsAdmin />} />

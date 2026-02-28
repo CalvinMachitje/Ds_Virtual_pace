@@ -1,5 +1,5 @@
 # app/routes/admin.py
-from flask import Blueprint, app, jsonify, request
+from flask import Blueprint, app, json, jsonify, request
 from flask_jwt_extended import jwt_required, get_jwt_identity
 import socketio
 from app.services.supabase_service import supabase
@@ -418,27 +418,80 @@ def delete_ticket(ticket_id: str):
 
 
 # =============================================================================
-# VERIFICATIONS
+# VERIFICATIONS – Admin endpoints
 # =============================================================================
-
 @bp.route("/verifications", methods=["GET"])
 @jwt_required()
 @admin_required
 @limiter.limit("30 per minute")
 def list_verifications():
+    """
+    Admin: List all seller verification requests
+    Supports filtering by status and seller_id
+    Supports pagination
+    """
     try:
-        filters = {
-            "status": request.args.get("status"),
-            "seller_id": request.args.get("seller_id")
-        }
-        query, page_info = build_query_with_filters("verifications", filters, order_by="submitted_at")
-        verifs = handle_supabase_response(query.execute()) or []
+        # Query parameters
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 20, type=int)
+        status_filter = request.args.get("status")
+        seller_id_filter = request.args.get("seller_id")
 
-        return jsonify({"verifications": verifs, **page_info}), 200
+        # Build base query with join to seller profile
+        query = supabase.table("verifications")\
+            .select("""
+                id,
+                seller_id,
+                status,
+                evidence_urls,
+                submitted_at,
+                rejection_reason,
+                reviewed_by,
+                reviewed_at,
+                seller:seller_id (
+                    full_name,
+                    email,
+                    phone
+                )
+            """, count="exact") \
+            .order("submitted_at", desc=True)
+
+        # Apply filters
+        if status_filter:
+            query = query.eq("status", status_filter)
+        if seller_id_filter:
+            query = query.eq("seller_id", seller_id_filter)
+
+        # Pagination
+        offset = (page - 1) * per_page
+        query = query.range(offset, offset + per_page - 1)
+
+        # Execute (NO count= here!)
+        result = query.execute()
+
+        verifications = handle_supabase_response(result) or []
+        total_count = getattr(result, "count", None) or len(verifications)
+
+        return jsonify({
+            "verifications": verifications,
+            "total": total_count,
+            "page": page,
+            "per_page": per_page,
+            "pages": (total_count + per_page - 1) // per_page if per_page > 0 else 1,
+            "has_more": (page * per_page) < total_count
+        }), 200
 
     except Exception as e:
-        logger.error("List verifications failed", exc_info=e)
-        return jsonify({"error": "Failed to fetch verifications"}), 500
+        logger.exception("List verifications failed")
+        return jsonify({
+            "verifications": [],
+            "total": 0,
+            "page": 1,
+            "per_page": 20,
+            "pages": 1,
+            "has_more": False,
+            "error": "Failed to fetch verifications (internal error)"
+        }), 200
 
 
 @bp.route("/verifications/<verification_id>", methods=["PATCH"])
@@ -446,53 +499,79 @@ def list_verifications():
 @admin_required
 @limiter.limit("20 per minute")
 def update_verification(verification_id: str):
-    data: Dict[str, Any] = request.get_json(silent=True) or {}
+    """
+    Admin: Update verification status (approve/reject)
+    - On approve: set seller is_verified = true
+    - On reject: optional rejection_reason
+    """
+    admin_id = get_jwt_identity()
+    data = request.get_json(silent=True) or {}
+
     if not data:
         return jsonify({"error": "No data provided"}), 400
 
-    allowed = ["status", "rejection_reason", "reviewed_by"]
-    update_data = {k: v for k, v in data.items() if k in allowed}
+    allowed_fields = ["status", "rejection_reason"]
+    update_data = {k: v for k, v in data.items() if k in allowed_fields}
 
     if not update_data:
-        return jsonify({"error": "No valid fields"}), 400
+        return jsonify({"error": "No valid fields to update"}), 400
+
+    # Validate status
+    new_status = update_data.get("status")
+    if new_status and new_status not in ["approved", "rejected", "pending"]:
+        return jsonify({"error": "Invalid status value"}), 400
 
     try:
-        # Validate status
-        if "status" in update_data and update_data["status"] not in ["approved", "rejected", "pending"]:
-            return jsonify({"error": "Invalid status"}), 400
+        # Prepare update
+        final_update = {
+            **update_data,
+            "reviewed_by": admin_id,
+            "reviewed_at": "now()",
+            "updated_at": "now()"
+        }
 
-        update_data["reviewed_at"] = "now()"
-        update_data["reviewed_by"] = get_jwt_identity()
-
-        resp = supabase.table("verifications")\
-            .update(update_data)\
+        # Execute update
+        res = supabase.table("verifications")\
+            .update(final_update)\
             .eq("id", verification_id)\
             .execute()
 
-        updated = handle_supabase_response(resp, single=True)
+        updated = res.data[0] if res.data else None
         if not updated:
-            return jsonify({"error": "Verification not found"}), 404
+            return jsonify({"error": "Verification request not found"}), 404
 
-        # If approved, update seller profile
-        if update_data.get("status") == "approved":
+        # If approved → mark seller as verified
+        if new_status == "approved":
             seller_id = updated["seller_id"]
-            supabase.table("profiles")\
+            profile_res = supabase.table("profiles")\
                 .update({"is_verified": True, "updated_at": "now()"})\
                 .eq("id", seller_id)\
                 .execute()
 
+            if not profile_res.data:
+                logger.warning(f"Failed to verify seller {seller_id} after approval")
+
+        # Log admin action
         log_admin_action(
+            admin_id=admin_id,
             action="update_verification",
             target_id=verification_id,
-            details={"status": update_data.get("status"), "reason": update_data.get("rejection_reason")}
+            target_type="verification",
+            details={
+                "new_status": new_status,
+                "rejection_reason": update_data.get("rejection_reason"),
+                "seller_id": updated["seller_id"]
+            }
         )
 
-        return jsonify(updated), 200
+        return jsonify({
+            "message": f"Verification {new_status or 'updated'} successfully",
+            "verification": updated
+        }), 200
 
     except Exception as e:
-        logger.error(f"Verification update failed (id: {verification_id})", exc_info=e)
-        return jsonify({"error": "Update failed"}), 500
-
+        logger.exception(f"Verification update failed (id: {verification_id}, admin: {admin_id})")
+        return jsonify({"error": "Failed to update verification"}), 500
 
 # =============================================================================
 # Manage Gigs
@@ -1101,3 +1180,525 @@ def get_available_sellers():
 def debug_supabase():
     status = supabase.check_connection()
     return jsonify(status), 200
+
+@bp.route("/analytics", methods=["GET"])
+@jwt_required()
+@admin_required
+def get_analytics():
+    try:
+        # Reuse your existing get_analytics_summary from supabase_service
+        summary = supabase.get_analytics_summary()
+
+        # Add role distribution
+        roles = supabase.table("profiles").select("role").execute().data or []
+        role_counts = {}
+        for r in roles:
+            role = r.get("role", "unknown")
+            role_counts[role] = role_counts.get(role, 0) + 1
+
+        role_distribution = [
+            {"role": role, "count": count}
+            for role, count in role_counts.items()
+        ]
+
+        return jsonify({
+            **summary,
+            "role_distribution": role_distribution
+        }), 200
+
+    except Exception as e:
+        logger.error(f"Analytics failed: {str(e)}", exc_info=True)
+        return jsonify({
+            "total_users": 0,
+            "total_sellers": 0,
+            "total_buyers": 0,
+            "total_bookings": 0,
+            "total_revenue": 0,
+            "role_distribution": [],
+            "error": "Failed to load analytics"
+        }), 200
+    
+@bp.route("/settings", methods=["GET"])
+@jwt_required()
+@admin_required
+def get_settings():
+    try:
+        # Fetch the single settings row (assuming id=1 or first row)
+        res = supabase.table("system_settings")\
+            .select("*")\
+            .limit(1)\
+            .execute()
+
+        if not res.data:
+            # Return defaults if no row exists
+            defaults = {
+                "service_fee_percentage": 10.0,
+                "payout_delay_days": 7,
+                "min_user_age": 18,
+                "require_id_verification": True,
+                "auto_ban_after_failed_logins": 5,
+                "gig_auto_approval": False,
+                "flagged_keywords": "scam,fake,illegal,adult",
+                "enable_email_notifications": True,
+                "session_timeout_minutes": 30,
+                "maintenance_mode": False,
+                "max_upload_size_mb": 50,
+                "daily_gig_creation_limit": 10,
+                "enable_2fa_enforcement": True,
+                "last_cache_clear": None,
+                "currency": "ZAR",
+                "default_language": "en",
+                "webhook_urls": {
+                    "stripe": "",
+                    "email_service": "",
+                    "analytics": ""
+                },
+                "categories": [
+                    {"id": "cat1", "name": "Graphic Design", "description": "", "active": True},
+                    {"id": "cat2", "name": "Web Development", "description": "", "active": True},
+                    # ... more default categories
+                ],
+                "role_permissions": {
+                    "buyer": {"can_post_jobs": True, "can_message": True, "can_book": True},
+                    "seller": {"can_create_gigs": True, "can_accept_bookings": True, "can_message": True},
+                    "admin": {"can_manage_users": True, "can_approve_gigs": True, "full_access": True}
+                }
+            }
+            return jsonify(defaults), 200
+
+        settings = res.data[0]
+        # Parse JSON fields
+        settings["categories"] = json.loads(settings.get("categories", "[]"))
+        settings["role_permissions"] = json.loads(settings.get("role_permissions", "{}"))
+        settings["webhook_urls"] = json.loads(settings.get("webhook_urls", "{}"))
+
+        return jsonify(settings), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+@bp.route("/settings", methods=["PATCH"])
+@jwt_required()
+@admin_required
+def update_settings():
+    admin_id = get_jwt_identity()
+    data = request.get_json()
+
+    if not data:
+        return jsonify({"error": "No data provided"}), 400
+
+    errors = []
+
+    # ────────────────────────────────────────────────
+    # Validation rules
+    # ────────────────────────────────────────────────
+    if "service_fee_percentage" in data:
+        v = data["service_fee_percentage"]
+        if not isinstance(v, (int, float)) or v < 0 or v > 30:
+            errors.append("service_fee_percentage must be between 0 and 30")
+
+    if "payout_delay_days" in data:
+        v = data["payout_delay_days"]
+        if not isinstance(v, int) or v < 0 or v > 30:
+            errors.append("payout_delay_days must be 0–30")
+
+    if "min_user_age" in data:
+        v = data["min_user_age"]
+        if not isinstance(v, int) or v < 13 or v > 21:
+            errors.append("min_user_age must be 13–21")
+
+    if "auto_ban_after_failed_logins" in data:
+        v = data["auto_ban_after_failed_logins"]
+        if not isinstance(v, int) or v < 0 or v > 20:
+            errors.append("auto_ban_after_failed_logins must be 0–20")
+
+    if "session_timeout_minutes" in data:
+        v = data["session_timeout_minutes"]
+        if not isinstance(v, int) or v < 5 or v > 1440:
+            errors.append("session_timeout_minutes must be 5–1440")
+
+    if "max_upload_size_mb" in data:
+        v = data["max_upload_size_mb"]
+        if not isinstance(v, int) or v < 1 or v > 100:
+            errors.append("max_upload_size_mb must be 1–100")
+
+    if "daily_gig_creation_limit" in data:
+        v = data["daily_gig_creation_limit"]
+        if not isinstance(v, int) or v < 1 or v > 100:
+            errors.append("daily_gig_creation_limit must be 1–100")
+
+    if "currency" in data:
+        v = data["currency"]
+        if not isinstance(v, str) or len(v) != 3 or not v.isalpha():
+            errors.append("currency must be a valid 3-letter ISO code (e.g. ZAR, USD)")
+
+    if "default_language" in data:
+        v = data["default_language"]
+        if not isinstance(v, str) or len(v) != 2 or not v.isalpha():
+            errors.append("default_language must be a valid 2-letter code (e.g. en, af)")
+
+    if errors:
+        return jsonify({"error": "Validation failed", "details": errors}), 400
+
+    # ────────────────────────────────────────────────
+    # Proceed with update
+    # ────────────────────────────────────────────────
+    try:
+        allowed_fields = [
+            # ... all previous fields ...
+            "currency", "default_language", "webhook_urls",
+            "categories", "role_permissions"
+        ]
+
+        update_payload = {k: v for k, v in data.items() if k in allowed_fields}
+
+        # JSON stringify where needed
+        for field in ["categories", "role_permissions", "webhook_urls"]:
+            if field in update_payload:
+                update_payload[field] = json.dumps(update_payload[field])
+
+        update_payload["updated_at"] = "now()"
+        update_payload["updated_by"] = admin_id
+
+        # Update or insert
+        res = supabase.table("system_settings")\
+            .update(update_payload)\
+            .eq("id", 1)\
+            .execute()
+
+        if not res.data:
+            insert_payload = {"id": 1, **update_payload, "created_at": "now()", "created_by": admin_id}
+            supabase.table("system_settings").insert(insert_payload).execute()
+
+        return jsonify({"message": "Settings updated successfully"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+    
+@bp.route("/categories", methods=["GET"])
+@jwt_required()
+@admin_required
+def list_categories():
+    res = supabase.table("system_settings")\
+        .select("categories")\
+        .limit(1)\
+        .execute()
+    
+    categories = json.loads(res.data[0]["categories"]) if res.data else []
+    return jsonify({"categories": categories}), 200
+
+
+@bp.route("/categories", methods=["POST"])
+@jwt_required()
+@admin_required
+def create_category():
+    data = request.get_json()
+    name = data.get("name")
+    description = data.get("description", "")
+
+    if not name or not name.strip():
+        return jsonify({"error": "Name is required"}), 400
+
+    # Get current categories
+    res = supabase.table("system_settings").select("categories").limit(1).execute()
+    current = json.loads(res.data[0]["categories"]) if res.data else []
+
+    new_cat = {
+        "id": str(uuid.uuid4()),
+        "name": name.strip(),
+        "description": description.strip(),
+        "active": True
+    }
+
+    current.append(new_cat)
+
+    supabase.table("system_settings")\
+        .update({"categories": json.dumps(current), "updated_at": "now()"})\
+        .eq("id", 1)\
+        .execute()
+
+    return jsonify({"message": "Category created", "category": new_cat}), 201
+
+
+@bp.route("/categories/<category_id>", methods=["PATCH"])
+@jwt_required()
+@admin_required
+def update_category(category_id):
+    data = request.get_json()
+    name = data.get("name")
+    active = data.get("active")
+
+    if name is None and active is None:
+        return jsonify({"error": "No fields to update"}), 400
+
+    res = supabase.table("system_settings").select("categories").limit(1).execute()
+    if not res.data:
+        return jsonify({"error": "Settings not found"}), 404
+
+    categories = json.loads(res.data[0]["categories"])
+    for cat in categories:
+        if cat["id"] == category_id:
+            if name is not None:
+                cat["name"] = name.strip()
+            if active is not None:
+                cat["active"] = bool(active)
+            break
+    else:
+        return jsonify({"error": "Category not found"}), 404
+
+    supabase.table("system_settings")\
+        .update({"categories": json.dumps(categories), "updated_at": "now()"})\
+        .eq("id", 1)\
+        .execute()
+
+    return jsonify({"message": "Category updated"}), 200
+
+
+@bp.route("/categories/<category_id>", methods=["DELETE"])
+@jwt_required()
+@admin_required
+def delete_category(category_id):
+    res = supabase.table("system_settings").select("categories").limit(1).execute()
+    if not res.data:
+        return jsonify({"error": "Settings not found"}), 404
+
+    categories = json.loads(res.data[0]["categories"])
+    new_list = [c for c in categories if c["id"] != category_id]
+
+    if len(new_list) == len(categories):
+        return jsonify({"error": "Category not found"}), 404
+
+    supabase.table("system_settings")\
+        .update({"categories": json.dumps(new_list), "updated_at": "now()"})\
+        .eq("id", 1)\
+        .execute()
+
+    return jsonify({"message": "Category deleted"}), 200
+
+# ────────────────────────────────────────────────
+# GET /api/admin/support
+# List all support tickets (paginated, filterable)
+# ────────────────────────────────────────────────
+@bp.route("/support", methods=["GET"])
+@jwt_required()
+@admin_required
+def list_support_tickets():
+    try:
+        page = request.args.get("page", 1, type=int)
+        per_page = request.args.get("per_page", 20, type=int)
+        status = request.args.get("status")  # optional: open, resolved, escalated, closed
+
+        offset = (page - 1) * per_page
+
+        query = supabase.table("support_tickets")\
+            .select("""
+                id,
+                user_id,
+                subject,
+                description,
+                status,
+                created_at,
+                escalated_note,
+                escalated_at,
+                user:profiles!user_id (full_name as user_name)
+            """)\
+            .order("created_at", desc=True)\
+            .range(offset, offset + per_page - 1)
+
+        if status:
+            query = query.eq("status", status)
+
+        res = query.execute()
+
+        tickets = res.data or []
+        total = res.count or len(tickets)
+
+        return jsonify({
+            "tickets": tickets,
+            "total": total,
+            "page": page,
+            "per_page": per_page,
+            "pages": (total + per_page - 1) // per_page if per_page else 1
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ────────────────────────────────────────────────
+# GET /api/admin/support/:id/thread
+# Get full conversation thread (original + all replies)
+# ────────────────────────────────────────────────
+@bp.route("/support/<ticket_id>/thread", methods=["GET"])
+@jwt_required()
+@admin_required
+def get_ticket_thread(ticket_id):
+    try:
+        # Get ticket details
+        ticket_res = supabase.table("support_tickets")\
+            .select("""
+                id,
+                user_id,
+                subject,
+                description,
+                status,
+                created_at,
+                user:profiles!user_id (full_name as user_name)
+            """)\
+            .eq("id", ticket_id)\
+            .single()\
+            .execute()
+
+        if not ticket_res.data:
+            return jsonify({"error": "Ticket not found"}), 404
+
+        ticket = ticket_res.data
+
+        # Get all replies (user + admin)
+        replies_res = supabase.table("support_replies")\
+            .select("""
+                id,
+                sender_id,
+                message,
+                created_at,
+                is_admin,
+                sender:profiles!sender_id (full_name as sender_name)
+            """)\
+            .eq("ticket_id", ticket_id)\
+            .order("created_at", desc=False)\
+            .execute()
+
+        return jsonify({
+            "ticket": ticket,
+            "replies": replies_res.data or []
+        }), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ────────────────────────────────────────────────
+# POST /api/admin/support/:id/reply
+# Admin sends a reply to the ticket
+# ────────────────────────────────────────────────
+@bp.route("/support/<ticket_id>/reply", methods=["POST"])
+@jwt_required()
+@admin_required
+def reply_to_ticket(ticket_id):
+    admin_id = get_jwt_identity()
+    data = request.get_json()
+
+    if not data or "message" not in data or not data["message"].strip():
+        return jsonify({"error": "Message is required"}), 400
+
+    message = data["message"].strip()
+
+    try:
+        # Verify ticket exists and is not closed
+        ticket_check = supabase.table("support_tickets")\
+            .select("id, status")\
+            .eq("id", ticket_id)\
+            .single()\
+            .execute()
+
+        if not ticket_check.data:
+            return jsonify({"error": "Ticket not found"}), 404
+
+        if ticket_check.data["status"] in ["closed", "resolved"]:
+            return jsonify({"error": "Cannot reply to closed/resolved ticket"}), 400
+
+        # Insert reply
+        reply = {
+            "id": str(uuid.uuid4()),
+            "ticket_id": ticket_id,
+            "sender_id": admin_id,
+            "message": message,
+            "is_admin": True,
+            "created_at": "now()"
+        }
+
+        res = supabase.table("support_replies").insert(reply).execute()
+
+        # Optional: update ticket last_activity
+        supabase.table("support_tickets")\
+            .update({"last_activity": "now()"})\
+            .eq("id", ticket_id)\
+            .execute()
+
+        # Optional: notify user via email or in-app (implement separately)
+
+        return jsonify({
+            "message": "Reply sent",
+            "reply": reply
+        }), 201
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ────────────────────────────────────────────────
+# PATCH /api/admin/support/:id/resolve
+# Admin resolves/closes the ticket
+# ────────────────────────────────────────────────
+@bp.route("/support/<ticket_id>/resolve", methods=["PATCH"])
+@jwt_required()
+@admin_required
+def resolve_ticket(ticket_id):
+    admin_id = get_jwt_identity()
+
+    try:
+        res = supabase.table("support_tickets")\
+            .update({
+                "status": "resolved",
+                "resolved_at": "now()",
+                "resolved_by": admin_id
+            })\
+            .eq("id", ticket_id)\
+            .execute()
+
+        if not res.data:
+            return jsonify({"error": "Ticket not found or already resolved"}), 404
+
+        # Optional: notify user that ticket is resolved
+
+        return jsonify({"message": "Ticket resolved"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+# ────────────────────────────────────────────────
+# PATCH /api/admin/support/:id/escalate
+# Escalate ticket to technical team
+# ────────────────────────────────────────────────
+@bp.route("/support/<ticket_id>/escalate", methods=["PATCH"])
+@jwt_required()
+@admin_required
+def escalate_ticket(ticket_id):
+    admin_id = get_jwt_identity()
+    data = request.get_json()
+
+    if not data or "escalated_note" not in data or not data["escalated_note"].strip():
+        return jsonify({"error": "Escalation note is required"}), 400
+
+    note = data["escalated_note"].strip()
+
+    try:
+        res = supabase.table("support_tickets")\
+            .update({
+                "status": "escalated",
+                "escalated_note": note,
+                "escalated_at": "now()",
+                "escalated_by": admin_id
+            })\
+            .eq("id", ticket_id)\
+            .execute()
+
+        if not res.data:
+            return jsonify({"error": "Ticket not found"}), 404
+
+        return jsonify({"message": "Ticket escalated to technical team"}), 200
+
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500

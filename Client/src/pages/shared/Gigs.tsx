@@ -19,18 +19,19 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import NavLayout from "@/components/layout/NavLayout"; // ← Added import
 
 type Gig = {
   id: string;
   title: string;
   description: string;
-  price: number;
+  price?: number | null;
   category: string;
   seller_id: string;
-  seller_name: string;
-  rating: number;
-  review_count: number;
-  available: boolean;
+  seller_name?: string;
+  rating?: number;
+  review_count?: number;
+  available?: boolean;
   image_url?: string;
   created_at: string;
 };
@@ -82,7 +83,7 @@ export default function Gigs() {
   const [availabilityOnly, setAvailabilityOnly] = useState(false);
 
   const categories = useMemo(() => {
-    return Array.from(new Set(allGigs.map(gig => gig.category)));
+    return Array.from(new Set(allGigs.map(gig => gig.category).filter(Boolean)));
   }, [allGigs]);
 
   // ────────────────────────────────────────────────
@@ -95,8 +96,8 @@ export default function Gigs() {
       const term = searchTerm.toLowerCase();
       result = result.filter(
         gig =>
-          gig.title.toLowerCase().includes(term) ||
-          gig.description.toLowerCase().includes(term) ||
+          gig.title?.toLowerCase().includes(term) ||
+          gig.description?.toLowerCase().includes(term) ||
           gig.seller_name?.toLowerCase().includes(term)
       );
     }
@@ -106,18 +107,18 @@ export default function Gigs() {
     }
 
     if (availabilityOnly) {
-      result = result.filter(gig => gig.available);
+      result = result.filter(gig => gig.available === true);
     }
 
     switch (sortOption) {
       case "price-low":
-        result.sort((a, b) => a.price - b.price);
+        result.sort((a, b) => (a.price ?? 0) - (b.price ?? 0));
         break;
       case "price-high":
-        result.sort((a, b) => b.price - a.price);
+        result.sort((a, b) => (b.price ?? 0) - (a.price ?? 0));
         break;
       case "rating-high":
-        result.sort((a, b) => (b.rating || 0) - (a.rating || 0));
+        result.sort((a, b) => (b.rating ?? 0) - (a.rating ?? 0));
         break;
       default: // newest
         result.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime());
@@ -163,13 +164,15 @@ export default function Gigs() {
   // ────────────────────────────────────────────────
   if (error) {
     return (
-      <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
-        <p className="text-xl mb-4">Failed to load gigs</p>
-        <p className="text-slate-400 mb-6">{(error as Error).message}</p>
-        <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700 flex items-center gap-2">
-          <RefreshCw className="h-4 w-4" /> Retry
-        </Button>
-      </div>
+      <NavLayout>
+        <div className="min-h-screen flex flex-col items-center justify-center text-red-400 p-6 bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900">
+          <p className="text-xl mb-4">Failed to load gigs</p>
+          <p className="text-slate-400 mb-6">{(error as Error).message}</p>
+          <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700 flex items-center gap-2">
+            <RefreshCw className="h-4 w-4" /> Retry
+          </Button>
+        </div>
+      </NavLayout>
     );
   }
 
@@ -177,187 +180,191 @@ export default function Gigs() {
     if (searchTerm && !selectedCategory && !availabilityOnly) {
       return `No gigs match your search for "${searchTerm}"`;
     }
-    // ... rest of your logic ...
+    if (searchTerm || selectedCategory || availabilityOnly) {
+      return "No gigs match the current filters";
+    }
     return "No gigs found";
   };
 
   return (
-    <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
-      <div className="max-w-6xl mx-auto">
-        <h1 className="text-4xl font-bold text-white mb-6">Available Gigs</h1>
+    <NavLayout> {/* ← Wrapped the entire content with NavLayout */}
+      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
+        <div className="max-w-6xl mx-auto">
+          <h1 className="text-4xl font-bold text-white mb-6">Available Gigs</h1>
 
-        {/* Controls */}
-        <div className="mb-8 space-y-4">
-          <div className="relative">
-            <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
-            <Input
-              placeholder="Search gigs, sellers, or descriptions..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="pl-10 bg-slate-900/60 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500"
-            />
-          </div>
-
-          <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center flex-wrap">
-            <Select value={sortOption} onValueChange={(v) => setSortOption(v as any)}>
-              <SelectTrigger className="w-full sm:w-48 bg-slate-900/60 border-slate-700 text-white">
-                <SelectValue placeholder="Sort by..." />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="newest">Newest First</SelectItem>
-                <SelectItem value="price-low">Price: Low to High</SelectItem>
-                <SelectItem value="price-high">Price: High to Low</SelectItem>
-                <SelectItem value="rating-high">Highest Rated</SelectItem>
-              </SelectContent>
-            </Select>
-
-            {categories.length > 0 && (
-              <div className="flex flex-wrap gap-2">
-                <Badge
-                  variant={selectedCategory === null ? "default" : "outline"}
-                  className={cn(
-                    "cursor-pointer px-3 py-1 text-sm",
-                    selectedCategory === null && "bg-blue-600 hover:bg-blue-700"
-                  )}
-                  onClick={() => setSelectedCategory(null)}
-                >
-                  All
-                </Badge>
-
-                {categories.map(cat => (
-                  <Badge
-                    key={cat}
-                    variant={selectedCategory === cat ? "default" : "outline"}
-                    className={cn(
-                      "cursor-pointer px-3 py-1 text-sm capitalize",
-                      selectedCategory === cat && "bg-blue-600 hover:bg-blue-700"
-                    )}
-                    onClick={() => setSelectedCategory(cat)}
-                  >
-                    {cat.replace(/_/g, " ")}
-                  </Badge>
-                ))}
-              </div>
-            )}
-
-            <Badge
-              variant={availabilityOnly ? "default" : "outline"}
-              className="cursor-pointer px-3 py-1 text-sm"
-              onClick={() => setAvailabilityOnly(!availabilityOnly)}
-            >
-              Available Only
-            </Badge>
-
-            {(searchTerm || selectedCategory || availabilityOnly) && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="text-slate-400 hover:text-white"
-                onClick={() => {
-                  setSearchTerm("");
-                  setSelectedCategory(null);
-                  setSortOption("newest");
-                  setAvailabilityOnly(false);
-                }}
-              >
-                <X className="h-4 w-4 mr-1" /> Clear Filters
-              </Button>
-            )}
-          </div>
-        </div>
-
-        {/* Content */}
-        {isLoading && allGigs.length === 0 ? (
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-            {[...Array(9)].map((_, i) => (
-              <Skeleton key={i} height={340} className="rounded-xl" />
-            ))}
-          </div>
-        ) : processedGigs.length === 0 ? (
-          <div className="text-center py-16 text-slate-400 bg-slate-900/40 rounded-xl border border-slate-800">
-            <Briefcase className="h-12 w-12 mx-auto mb-4 opacity-50" />
-            <p className="text-xl font-medium">{noResultsMessage()}</p>
-          </div>
-        ) : (
-          <>
-            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
-              {processedGigs.map(gig => (
-                <Card
-                  key={gig.id}
-                  className="bg-slate-900/70 border-slate-700 hover:border-blue-600 hover:shadow-lg hover:shadow-blue-950/30 transition-all duration-300 overflow-hidden group"
-                >
-                  <div className="relative">
-                    <img
-                      src={gig.image_url || "/placeholder-gig.jpg"}
-                      alt={gig.title}
-                      className="w-full h-48 object-cover transition-transform duration-500 group-hover:scale-105"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
-                  </div>
-                  <CardContent className="p-6">
-                    <div className="flex flex-wrap gap-2 mb-3">
-                      <Badge variant="secondary" className="bg-slate-800 text-slate-300 capitalize">
-                        {gig.category.replace(/_/g, " ")}
-                      </Badge>
-                    </div>
-
-                    <h3 className="text-xl font-semibold text-white mb-2 line-clamp-2 group-hover:text-blue-400 transition-colors">
-                      {gig.title}
-                    </h3>
-                    <p className="text-slate-300 text-sm mb-4 line-clamp-3">
-                      {gig.description}
-                    </p>
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-2">
-                        <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
-                        <span className="text-slate-300">
-                          {gig.rating.toFixed(1)} ({gig.review_count})
-                        </span>
-                      </div>
-                      <span className="text-emerald-400 font-medium">
-                        R{gig.price.toFixed(2)} / hr
-                      </span>
-                    </div>
-                    <p className="text-slate-400 text-sm">
-                      by {gig.seller_name || "Seller"} {gig.available ? "(Available)" : "(Unavailable)"}
-                    </p>
-                  </CardContent>
-                  <CardFooter className="p-6 pt-0">
-                    <Link to={`/gig/${gig.id}`} className="w-full">
-                      <Button className="w-full bg-blue-600 hover:bg-blue-700 transition-colors">
-                        View & Book
-                      </Button>
-                    </Link>
-                  </CardFooter>
-                </Card>
-              ))}
+          {/* Controls */}
+          <div className="mb-8 space-y-4">
+            <div className="relative">
+              <SearchIcon className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
+              <Input
+                placeholder="Search gigs, sellers, or descriptions..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                className="pl-10 bg-slate-900/60 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500"
+              />
             </div>
 
-            {hasNextPage && (
-              <div ref={loadMoreRef} className="py-8 flex justify-center">
-                {isFetchingNextPage ? (
-                  <div className="flex items-center gap-2 text-slate-400">
-                    <RefreshCw className="h-5 w-5 animate-spin" />
-                    Loading more gigs...
-                  </div>
-                ) : (
-                  <Button
-                    variant="outline"
-                    onClick={() => fetchNextPage()}
-                    className="border-slate-600 hover:bg-slate-800"
-                  >
-                    Load More
-                  </Button>
-                )}
-              </div>
-            )}
+            <div className="flex flex-col sm:flex-row gap-4 items-start sm:items-center flex-wrap">
+              <Select value={sortOption} onValueChange={(v) => setSortOption(v as any)}>
+                <SelectTrigger className="w-full sm:w-48 bg-slate-900/60 border-slate-700 text-white">
+                  <SelectValue placeholder="Sort by..." />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="newest">Newest First</SelectItem>
+                  <SelectItem value="price-low">Price: Low to High</SelectItem>
+                  <SelectItem value="price-high">Price: High to Low</SelectItem>
+                  <SelectItem value="rating-high">Highest Rated</SelectItem>
+                </SelectContent>
+              </Select>
 
-            {!hasNextPage && processedGigs.length > 0 && (
-              <p className="text-center text-slate-500 py-8">End of results</p>
-            )}
-          </>
-        )}
+              {categories.length > 0 && (
+                <div className="flex flex-wrap gap-2">
+                  <Badge
+                    variant={selectedCategory === null ? "default" : "outline"}
+                    className={cn(
+                      "cursor-pointer px-3 py-1 text-sm",
+                      selectedCategory === null && "bg-blue-600 hover:bg-blue-700"
+                    )}
+                    onClick={() => setSelectedCategory(null)}
+                  >
+                    All
+                  </Badge>
+
+                  {categories.map(cat => (
+                    <Badge
+                      key={cat}
+                      variant={selectedCategory === cat ? "default" : "outline"}
+                      className={cn(
+                        "cursor-pointer px-3 py-1 text-sm capitalize",
+                        selectedCategory === cat && "bg-blue-600 hover:bg-blue-700"
+                      )}
+                      onClick={() => setSelectedCategory(cat)}
+                    >
+                      {cat.replace(/_/g, " ")}
+                    </Badge>
+                  ))}
+                </div>
+              )}
+
+              <Badge
+                variant={availabilityOnly ? "default" : "outline"}
+                className="cursor-pointer px-3 py-1 text-sm"
+                onClick={() => setAvailabilityOnly(!availabilityOnly)}
+              >
+                Available Only
+              </Badge>
+
+              {(searchTerm || selectedCategory || availabilityOnly) && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="text-slate-400 hover:text-white"
+                  onClick={() => {
+                    setSearchTerm("");
+                    setSelectedCategory(null);
+                    setSortOption("newest");
+                    setAvailabilityOnly(false);
+                  }}
+                >
+                  <X className="h-4 w-4 mr-1" /> Clear Filters
+                </Button>
+              )}
+            </div>
+          </div>
+
+          {/* Content */}
+          {isLoading && allGigs.length === 0 ? (
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+              {[...Array(9)].map((_, i) => (
+                <Skeleton key={i} height={340} className="rounded-xl" />
+              ))}
+            </div>
+          ) : processedGigs.length === 0 ? (
+            <div className="text-center py-16 text-slate-400 bg-slate-900/40 rounded-xl border border-slate-800">
+              <Briefcase className="h-12 w-12 mx-auto mb-4 opacity-50" />
+              <p className="text-xl font-medium">{noResultsMessage()}</p>
+            </div>
+          ) : (
+            <>
+              <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+                {processedGigs.map(gig => (
+                  <Card
+                    key={gig.id}
+                    className="bg-slate-900/70 border-slate-700 hover:border-blue-600 hover:shadow-lg hover:shadow-blue-950/30 transition-all duration-300 overflow-hidden group"
+                  >
+                    <div className="relative">
+                      <img
+                        src={gig.image_url || "/placeholder-gig.jpg"}
+                        alt={gig.title}
+                        className="w-full h-48 object-cover transition-transform duration-500 group-hover:scale-105"
+                      />
+                      <div className="absolute inset-0 bg-gradient-to-t from-black/60 to-transparent opacity-0 group-hover:opacity-100 transition-opacity duration-300" />
+                    </div>
+                    <CardContent className="p-6">
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        <Badge variant="secondary" className="bg-slate-800 text-slate-300 capitalize">
+                          {gig.category?.replace(/_/g, " ") || "General"}
+                        </Badge>
+                      </div>
+
+                      <h3 className="text-xl font-semibold text-white mb-2 line-clamp-2 group-hover:text-blue-400 transition-colors">
+                        {gig.title || "Untitled Gig"}
+                      </h3>
+                      <p className="text-slate-300 text-sm mb-4 line-clamp-3">
+                        {gig.description || "No description available"}
+                      </p>
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-2">
+                          <Star className="h-4 w-4 text-yellow-400 fill-yellow-400" />
+                          <span className="text-slate-300">
+                            {(gig.rating ?? 0).toFixed(1)} ({gig.review_count ?? 0})
+                          </span>
+                        </div>
+                        <span className="text-emerald-400 font-medium">
+                          {gig.price != null ? `R${gig.price.toFixed(2)} / hr` : "Price on request"}
+                        </span>
+                      </div>
+                      <p className="text-slate-400 text-sm">
+                        by {gig.seller_name || "Seller"} {gig.available ? "(Available)" : "(Unavailable)"}
+                      </p>
+                    </CardContent>
+                    <CardFooter className="p-6 pt-0">
+                      <Link to={`/gig/${gig.id}`} className="w-full">
+                        <Button className="w-full bg-blue-600 hover:bg-blue-700 transition-colors">
+                          View & Book
+                        </Button>
+                      </Link>
+                    </CardFooter>
+                  </Card>
+                ))}
+              </div>
+
+              {hasNextPage && (
+                <div ref={loadMoreRef} className="py-8 flex justify-center">
+                  {isFetchingNextPage ? (
+                    <div className="flex items-center gap-2 text-slate-400">
+                      <RefreshCw className="h-5 w-5 animate-spin" />
+                      Loading more gigs...
+                    </div>
+                  ) : (
+                    <Button
+                      variant="outline"
+                      onClick={() => fetchNextPage()}
+                      className="border-slate-600 hover:bg-slate-800"
+                    >
+                      Load More
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              {!hasNextPage && processedGigs.length > 0 && (
+                <p className="text-center text-slate-500 py-8">End of results</p>
+              )}
+            </>
+          )}
+        </div>
       </div>
-    </div>
+    </NavLayout>
   );
 }

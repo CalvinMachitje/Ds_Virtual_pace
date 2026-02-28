@@ -26,11 +26,11 @@ def create_app():
 
     # JWT settings
     app.config["JWT_ACCESS_TOKEN_EXPIRES"] = timedelta(minutes=45)
-    app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=7)
     app.config["JWT_TOKEN_LOCATION"] = ["headers"]
     app.config["JWT_COOKIE_SECURE"] = True
     app.config["JWT_COOKIE_SAMESITE"] = "Strict"
     app.config["JWT_COOKIE_CSRF_PROTECT"] = True
+    app.config["JWT_REFRESH_TOKEN_EXPIRES"] = timedelta(days=7)
 
     # CORS – explicit and safe
     frontend_origins = [
@@ -97,6 +97,14 @@ def create_app():
         logger.info("Registered shared blueprint")
     except ImportError as e:
         logger.error(f"Shared blueprint import failed: {e}")
+
+    
+    try:
+        from app.routes.support import bp as support_bp
+        app.register_blueprint(support_bp)
+        logger.info("Registered support blueprint")
+    except ImportError as e:
+        logger.error(f"Support blueprint import failed: {e}")
 
     # ── Health check endpoint ────────────────────────────────────────────
     @app.route("/api/health")

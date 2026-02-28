@@ -5,7 +5,6 @@ import {
   ArrowLeft,
   Edit,
   Phone,
-  Save,
   Loader2,
   ChevronLeft,
   ChevronRight,
@@ -158,9 +157,8 @@ export default function SellerProfile() {
 
         let profileData;
 
-        // 1. Profile fetch logic
+        // 1. Profile fetch
         if (isOwnProfile) {
-          // Own profile → use seller-specific endpoint
           const profileRes = await fetch("/api/seller/profile", {
             headers: {
               Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
@@ -174,7 +172,6 @@ export default function SellerProfile() {
 
           profileData = await profileRes.json();
         } else {
-          // Viewing someone else's profile → use public endpoint (create later)
           const profileRes = await fetch(`/api/profile/${id}`, {
             headers: {
               Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
@@ -198,8 +195,8 @@ export default function SellerProfile() {
           setEditAvatarUrl(profileData.avatar_url || "");
         }
 
-        // 2. Reviews (public)
-        const reviewsRes = await fetch(`/api/profile/${id}/reviews`, {
+        // 2. Reviews (public – use seller prefix since it's seller profile)
+        const reviewsRes = await fetch(`/api/seller/profile/${id}/reviews`, {
           headers: {
             Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
           },
@@ -208,7 +205,7 @@ export default function SellerProfile() {
         if (reviewsRes.ok) {
           const reviewsData = await reviewsRes.json();
           setReviews(
-            reviewsData.map((r: any) => ({
+            (reviewsData.reviews || []).map((r: any) => ({
               id: r.id,
               rating: r.rating,
               comment: r.comment,
@@ -216,6 +213,8 @@ export default function SellerProfile() {
               reviewer: r.reviewer || { full_name: "Anonymous", avatar_url: null },
             }))
           );
+        } else {
+          toast.error("Failed to load reviews");
         }
 
         // 3. Verification (only own seller profile)
@@ -229,6 +228,8 @@ export default function SellerProfile() {
           if (verRes.ok) {
             const verData = await verRes.json();
             setVerification(verData);
+          } else {
+            toast.error("Failed to load verification status");
           }
         }
       } catch (err: any) {
@@ -377,7 +378,7 @@ export default function SellerProfile() {
         const formData = new FormData();
         formData.append("avatar", selectedAvatarFile);
 
-        const avatarRes = await fetch("/api/seller/avatar", {  // ← updated endpoint
+        const avatarRes = await fetch("/api/seller/avatar", {
           method: "POST",
           headers: {
             Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
@@ -392,7 +393,7 @@ export default function SellerProfile() {
         setUploadingAvatar(false);
       }
 
-      const updateRes = await fetch("/api/seller/profile", {  // ← updated endpoint
+      const updateRes = await fetch("/api/seller/profile", {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
@@ -479,7 +480,7 @@ export default function SellerProfile() {
               <ArrowLeft className="h-6 w-6" />
             </Button>
             <h1 className="text-3xl font-bold text-white">
-              {isOwnProfile ? "My Profile" : `${profile.full_name}'s Profile`}
+              {isOwnProfile ? "My Profile" : `${profile.full_name || "Seller"}'s Profile`}
             </h1>
           </div>
 
@@ -514,7 +515,7 @@ export default function SellerProfile() {
 
               <div className="flex-1 text-center md:text-left space-y-4">
                 <div className="flex flex-col md:flex-row items-center md:items-start gap-3">
-                  <h2 className="text-3xl font-bold text-white">{profile.full_name}</h2>
+                  <h2 className="text-3xl font-bold text-white">{profile.full_name || "Seller"}</h2>
                   {profile.is_verified && (
                     <Badge className="bg-blue-600 hover:bg-blue-700 text-white text-base px-4 py-1">
                       Verified Seller
@@ -551,7 +552,7 @@ export default function SellerProfile() {
           </CardContent>
         </Card>
 
-        {/* Portfolio Section – public */}
+        {/* Portfolio Section */}
         <Card className="bg-slate-900/70 border-slate-700 mb-8">
           <CardHeader className="flex flex-row items-center justify-between">
             <CardTitle className="text-white">Portfolio</CardTitle>
@@ -578,7 +579,7 @@ export default function SellerProfile() {
           <CardContent>
             {(profile.portfolio_images?.length || pendingPortfolioFiles.length) ? (
               <div className="space-y-6">
-                {/* Already uploaded images – visible to everyone */}
+                {/* Already uploaded images */}
                 {profile.portfolio_images?.length ? (
                   <div className="relative">
                     <div
@@ -600,7 +601,7 @@ export default function SellerProfile() {
                               variant="destructive"
                               size="icon"
                               className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity"
-                              // TODO: Implement delete endpoint if needed
+                              // TODO: Add delete functionality
                             >
                               <Trash2 className="h-4 w-4" />
                             </Button>
@@ -632,7 +633,7 @@ export default function SellerProfile() {
                   </div>
                 ) : null}
 
-                {/* Pending uploads – only owner sees this */}
+                {/* Pending uploads – only owner */}
                 {pendingPortfolioFiles.length > 0 && isOwnProfile && (
                   <div className="space-y-4">
                     <Label className="text-slate-200">
@@ -725,7 +726,7 @@ export default function SellerProfile() {
           </CardContent>
         </Card>
 
-        {/* About & Contact – public, but phone/email only for owner or if messaging */}
+        {/* About & Contact */}
         <div className="grid md:grid-cols-2 gap-8 mb-8">
           <Card className="bg-slate-900/70 border-slate-700">
             <CardHeader>
@@ -767,7 +768,7 @@ export default function SellerProfile() {
           </Card>
         </div>
 
-        {/* Reviews – public */}
+        {/* Reviews */}
         <Card className="bg-slate-900/70 border-slate-700">
           <CardHeader>
             <CardTitle className="text-white flex items-center justify-between">
@@ -828,7 +829,7 @@ export default function SellerProfile() {
                           </AvatarFallback>
                         </Avatar>
                         <div>
-                          <p className="font-medium text-white">{review.reviewer.full_name}</p>
+                          <p className="font-medium text-white">{review.reviewer.full_name || "Anonymous"}</p>
                           <p className="text-sm text-slate-400">
                             {new Date(review.created_at).toLocaleDateString("en-ZA", {
                               year: "numeric",
@@ -863,13 +864,16 @@ export default function SellerProfile() {
             ) : (
               <div className="text-center py-16 bg-slate-800/40 rounded-xl border border-slate-700">
                 <p className="text-slate-400 italic text-lg">No reviews yet.</p>
+                <p className="text-slate-500 mt-2">
+                  This seller has not received any client feedback yet.
+                </p>
               </div>
             )}
           </CardContent>
         </Card>
       </div>
 
-      {/* Edit Profile Dialog – only owner */}
+      {/* Edit Profile Dialog */}
       {isOwnProfile && (
         <Dialog open={showEditModal} onOpenChange={setShowEditModal}>
           <DialogContent className="sm:max-w-lg">

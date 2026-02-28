@@ -1,13 +1,12 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/buyer/BuyerMessagesPage.tsx
-import { useState, useEffect } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { Link } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Card, CardContent } from "@/components/ui/card";
 import {
   Dialog,
   DialogContent,
@@ -29,10 +28,11 @@ import {
   PopoverTrigger,
 } from "@/components/ui/popover";
 import { Command, CommandInput, CommandItem, CommandList } from "@/components/ui/command";
+import { debounce } from "lodash";
 
 type Conversation = {
   id: string;
-  seller_name: string;
+  seller_name?: string;           // made optional
   seller_avatar?: string;
   last_message: string;
   last_message_time: string;
@@ -71,6 +71,8 @@ const fetchBuyerConversations = async (buyerId: string): Promise<Conversation[]>
 };
 
 const fetchSellers = async (search: string): Promise<Seller[]> => {
+  if (search.trim().length < 2) return [];
+
   const res = await fetch(`/api/sellers/search?q=${encodeURIComponent(search)}`, {
     headers: {
       Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
@@ -86,15 +88,16 @@ export default function BuyerMessagesPage() {
   const buyerId = user?.id;
   const queryClient = useQueryClient();
   const navigate = useNavigate();
+
   const [searchTerm, setSearchTerm] = useState("");
   const [showNewChatModal, setShowNewChatModal] = useState(false);
-  const [newSellerId, setNewSellerId] = useState("");
   const [newChatLoading, setNewChatLoading] = useState(false);
   const [sellerSearch, setSellerSearch] = useState("");
   const [sellerSearchResults, setSellerSearchResults] = useState<Seller[]>([]);
   const [selectedSeller, setSelectedSeller] = useState<Seller | null>(null);
   const [starterMessage, setStarterMessage] = useState("Hello! I'd like to discuss your gig.");
   const [notifications, setNotifications] = useState<Message[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
 
   const { data: conversations = [], isLoading, error } = useQuery<Conversation[]>({
     queryKey: ["buyer-conversations", buyerId],
@@ -102,34 +105,42 @@ export default function BuyerMessagesPage() {
     enabled: !!buyerId,
   });
 
-  // Poll for new messages every 30 seconds (replace with WebSocket later)
+  // Poll every 20 seconds
   useEffect(() => {
     if (!buyerId) return;
 
     const interval = setInterval(() => {
       queryClient.invalidateQueries({ queryKey: ["buyer-conversations", buyerId] });
-    }, 30000);
+    }, 20000);
 
     return () => clearInterval(interval);
   }, [buyerId, queryClient]);
 
-  // Seller search autocomplete
-  useEffect(() => {
-    if (sellerSearch.trim().length < 2) {
-      setSellerSearchResults([]);
-      return;
-    }
+  // Debounced seller search
+  const debouncedSearch = useCallback(
+    debounce(async (term: string) => {
+      if (term.trim().length < 2) {
+        setSellerSearchResults([]);
+        setIsSearching(false);
+        return;
+      }
 
-    const search = async () => {
-      const results = await fetchSellers(sellerSearch);
+      setIsSearching(true);
+      const results = await fetchSellers(term);
       setSellerSearchResults(results);
-    };
+      setIsSearching(false);
+    }, 500),
+    []
+  );
 
-    search();
-  }, [sellerSearch]);
+  useEffect(() => {
+    debouncedSearch(sellerSearch);
+    return () => debouncedSearch.cancel();
+  }, [sellerSearch, debouncedSearch]);
 
+  // Safe filter – prevent crash if seller_name missing
   const filteredConversations = conversations.filter((conv) =>
-    conv.seller_name.toLowerCase().includes(searchTerm.toLowerCase())
+    (conv.seller_name || "Unknown Seller").toLowerCase().includes(searchTerm.toLowerCase())
   );
 
   const handleStartNewChat = async () => {
@@ -169,6 +180,7 @@ export default function BuyerMessagesPage() {
       setSelectedSeller(null);
       setSellerSearch("");
       setStarterMessage("Hello! I'd like to discuss your gig.");
+      queryClient.invalidateQueries({ queryKey: ["buyer-conversations", buyerId] });
     } catch (err: any) {
       toast.error("Failed to start chat: " + err.message);
     } finally {
@@ -270,6 +282,13 @@ export default function BuyerMessagesPage() {
             <MessageSquare className="h-12 w-12 mx-auto mb-4 opacity-50" />
             <p className="text-xl font-medium">No conversations found</p>
             <p className="mt-2">Start booking gigs or messaging sellers to begin.</p>
+            <Button
+              className="mt-6 bg-blue-600 hover:bg-blue-700"
+              onClick={() => setShowNewChatModal(true)}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              Start New Chat
+            </Button>
           </div>
         ) : (
           <div className="space-y-3">
@@ -282,8 +301,8 @@ export default function BuyerMessagesPage() {
                 <div className="flex items-start gap-4">
                   <div className="relative">
                     <Avatar className="h-14 w-14">
-                      <AvatarImage src={conv.seller_avatar} alt={conv.seller_name} />
-                      <AvatarFallback>{conv.seller_name?.[0] || "?"}</AvatarFallback>
+                      <AvatarImage src={conv.seller_avatar} alt={conv.seller_name || "Seller"} />
+                      <AvatarFallback>{(conv.seller_name || "?")[0]}</AvatarFallback>
                     </Avatar>
                     {conv.unread_count > 0 && (
                       <Badge className="absolute -top-1 -right-1 bg-red-500 text-white text-xs px-2 py-0.5 min-w-[1.25rem] h-5 flex items-center justify-center">
@@ -295,15 +314,15 @@ export default function BuyerMessagesPage() {
                   <div className="flex-1 min-w-0">
                     <div className="flex justify-between items-start">
                       <h3 className="font-semibold text-white truncate group-hover:text-blue-400 transition-colors">
-                        {conv.seller_name}
+                        {conv.seller_name || "Unknown Seller"}
                       </h3>
                       <span className="text-xs text-slate-400 whitespace-nowrap">
-                        {conv.last_message_time}
+                        {conv.last_message_time || "—"}
                       </span>
                     </div>
 
                     <p className="text-sm text-slate-300 line-clamp-1 mt-1">
-                      {conv.last_message}
+                      {conv.last_message || "No messages yet"}
                     </p>
 
                     <div className="flex items-center gap-3 mt-2">
@@ -340,22 +359,28 @@ export default function BuyerMessagesPage() {
                 className="text-white placeholder:text-slate-500"
               />
               <CommandList>
-                {sellerSearchResults.map((seller) => (
-                  <CommandItem
-                    key={seller.id}
-                    onSelect={() => {
-                      setSelectedSeller(seller);
-                      setSellerSearch(seller.full_name);
-                    }}
-                    className="flex items-center gap-3 hover:bg-slate-800 cursor-pointer"
-                  >
-                    <Avatar className="h-6 w-6">
-                      <AvatarImage src={seller.avatar_url} alt={seller.full_name} />
-                      <AvatarFallback>{seller.full_name?.[0]}</AvatarFallback>
-                    </Avatar>
-                    <span>{seller.full_name}</span>
-                  </CommandItem>
-                ))}
+                {isSearching ? (
+                  <div className="p-4 text-center text-slate-400">Searching...</div>
+                ) : sellerSearchResults.length === 0 && sellerSearch.trim().length >= 2 ? (
+                  <div className="p-4 text-center text-slate-400">No sellers found</div>
+                ) : (
+                  sellerSearchResults.map((seller) => (
+                    <CommandItem
+                      key={seller.id}
+                      onSelect={() => {
+                        setSelectedSeller(seller);
+                        setSellerSearch(seller.full_name);
+                      }}
+                      className="flex items-center gap-3 hover:bg-slate-800 cursor-pointer"
+                    >
+                      <Avatar className="h-6 w-6">
+                        <AvatarImage src={seller.avatar_url} alt={seller.full_name} />
+                        <AvatarFallback>{seller.full_name?.[0]}</AvatarFallback>
+                      </Avatar>
+                      <span>{seller.full_name}</span>
+                    </CommandItem>
+                  ))
+                )}
               </CommandList>
             </Command>
             <Textarea

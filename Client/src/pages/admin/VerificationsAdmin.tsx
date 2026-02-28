@@ -13,10 +13,16 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
-import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { toast } from "sonner";
-import { Loader2, AlertCircle, CheckCircle, XCircle } from "lucide-react";
+import { Loader2, AlertCircle, CheckCircle, XCircle, Eye, RefreshCw } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
 import "react-loading-skeleton/dist/skeleton.css";
 import { formatDistanceToNow } from "date-fns";
@@ -24,23 +30,34 @@ import { formatDistanceToNow } from "date-fns";
 type Verification = {
   id: string;
   seller_id: string;
-  type: string;
   status: "pending" | "approved" | "rejected";
   submitted_at: string;
-  evidence_urls?: string[] | null; // updated to array
-  full_name?: string | null;
-  email?: string | null;
+  evidence_urls?: string[] | null;
+  rejection_reason?: string | null;
+  reviewed_by?: string | null;
+  reviewed_at?: string | null;
+  seller?: {
+    full_name: string | null;
+    email: string | null;
+    phone: string | null;
+  };
 };
 
 export default function VerificationsAdmin() {
   const queryClient = useQueryClient();
 
-  const [confirmOpen, setConfirmOpen] = useState(false);
+  const [confirmApproveOpen, setConfirmApproveOpen] = useState(false);
   const [rejectOpen, setRejectOpen] = useState(false);
   const [selectedVer, setSelectedVer] = useState<Verification | null>(null);
   const [rejectReason, setRejectReason] = useState("");
 
-  const { data: verifications = [], isLoading, error, refetch } = useQuery<Verification[]>({
+  // Fetch all verifications – default to empty array
+  const { 
+    data: verifications = [], 
+    isLoading, 
+    error, 
+    refetch 
+  } = useQuery<Verification[]>({
     queryKey: ["admin-verifications"],
     queryFn: async () => {
       const res = await fetch("/api/admin/verifications", {
@@ -50,23 +67,25 @@ export default function VerificationsAdmin() {
       });
 
       if (!res.ok) {
-        const err = await res.json();
+        const err = await res.json().catch(() => ({}));
         throw new Error(err.error || "Failed to load verifications");
       }
 
-      return res.json();
+      const data = await res.json();
+      return Array.isArray(data) ? data : [];
     },
   });
 
+  // Approve mutation
   const approveMutation = useMutation({
-    mutationFn: async ({ verId, sellerId }: { verId: string; sellerId: string }) => {
-      const res = await fetch(`/api/admin/verifications/${verId}/approve`, {
+    mutationFn: async (verId: string) => {
+      const res = await fetch(`/api/admin/verifications/${verId}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
         },
-        body: JSON.stringify({ seller_id: sellerId }),
+        body: JSON.stringify({ status: "approved" }),
       });
 
       if (!res.ok) {
@@ -78,7 +97,7 @@ export default function VerificationsAdmin() {
     onSuccess: () => {
       toast.success("Verification approved successfully");
       queryClient.invalidateQueries({ queryKey: ["admin-verifications"] });
-      setConfirmOpen(false);
+      setConfirmApproveOpen(false);
       setSelectedVer(null);
     },
     onError: (err: any) => {
@@ -86,15 +105,16 @@ export default function VerificationsAdmin() {
     },
   });
 
+  // Reject mutation
   const rejectMutation = useMutation({
     mutationFn: async ({ verId, reason }: { verId: string; reason: string }) => {
-      const res = await fetch(`/api/admin/verifications/${verId}/reject`, {
+      const res = await fetch(`/api/admin/verifications/${verId}`, {
         method: "PATCH",
         headers: {
           "Content-Type": "application/json",
           Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
         },
-        body: JSON.stringify({ rejection_reason: reason.trim() || undefined }),
+        body: JSON.stringify({ status: "rejected", rejection_reason: reason.trim() }),
       });
 
       if (!res.ok) {
@@ -104,7 +124,7 @@ export default function VerificationsAdmin() {
       return res.json();
     },
     onSuccess: () => {
-      toast.success("Verification rejected");
+      toast.success("Verification rejected successfully");
       queryClient.invalidateQueries({ queryKey: ["admin-verifications"] });
       setRejectOpen(false);
       setRejectReason("");
@@ -117,7 +137,7 @@ export default function VerificationsAdmin() {
 
   const handleApproveClick = (ver: Verification) => {
     setSelectedVer(ver);
-    setConfirmOpen(true);
+    setConfirmApproveOpen(true);
   };
 
   const handleRejectClick = (ver: Verification) => {
@@ -128,62 +148,46 @@ export default function VerificationsAdmin() {
 
   const confirmApprove = () => {
     if (!selectedVer) return;
-    approveMutation.mutate({ verId: selectedVer.id, sellerId: selectedVer.seller_id });
+    approveMutation.mutate(selectedVer.id);
   };
 
   const confirmReject = () => {
     if (!selectedVer) return;
     if (rejectReason.trim().length < 10) {
-      toast.error("Please provide a rejection reason (min 10 characters)");
+      toast.error("Rejection reason must be at least 10 characters");
       return;
     }
     rejectMutation.mutate({ verId: selectedVer.id, reason: rejectReason });
   };
 
-  if (isLoading) {
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
-        <div className="max-w-6xl mx-auto">
-          <h1 className="text-3xl font-bold text-white mb-8">Manage Verifications</h1>
-          <Card className="bg-slate-900/70 border-slate-700">
-            <CardHeader>
-              <CardTitle className="text-white">Pending Verifications</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <Skeleton height={400} />
-            </CardContent>
-          </Card>
-        </div>
-      </div>
-    );
-  }
+  const viewEvidence = (url: string) => {
+    window.open(url, "_blank");
+  };
 
-  if (error) {
-    return (
-      <div className="min-h-screen flex flex-col items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-red-400 p-6">
-        <AlertCircle className="h-16 w-16 mb-4" />
-        <h2 className="text-2xl font-bold mb-2">Failed to load verifications</h2>
-        <p className="text-slate-400 mb-6">{(error as Error).message}</p>
-        <Button onClick={() => refetch()} className="bg-blue-600 hover:bg-blue-700">
-          Retry
-        </Button>
-      </div>
-    );
-  }
+  // Safe array handling – prevents .filter crash
+  const safeVerifications = Array.isArray(verifications) ? verifications : [];
+  const pendingVerifications = safeVerifications.filter(v => v.status === "pending") ?? [];
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6">
       <div className="max-w-6xl mx-auto">
-        <h1 className="text-3xl font-bold text-white mb-8">Manage Verifications</h1>
+        <h1 className="text-3xl md:text-4xl font-bold text-white mb-6 md:mb-8">Manage Verifications</h1>
 
         <Card className="bg-slate-900/70 border-slate-700">
-          <CardHeader>
-            <CardTitle className="text-white">Pending Verifications</CardTitle>
+          <CardHeader className="pb-3">
+            <CardTitle className="text-white flex items-center gap-2">
+              <AlertCircle className="h-5 w-5 text-yellow-500" />
+              Pending Verifications ({pendingVerifications.length})
+            </CardTitle>
           </CardHeader>
           <CardContent>
-            {verifications.length === 0 ? (
+            {isLoading ? (
+              <div className="space-y-4">
+                <Skeleton height={60} count={5} />
+              </div>
+            ) : pendingVerifications.length === 0 ? (
               <div className="text-center py-12 text-slate-400 border border-dashed border-slate-700 rounded-lg">
-                No pending verifications at the moment.
+                No pending verification requests at the moment.
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -192,22 +196,20 @@ export default function VerificationsAdmin() {
                     <TableRow>
                       <TableHead className="text-slate-400">Seller</TableHead>
                       <TableHead className="text-slate-400">Email</TableHead>
-                      <TableHead className="text-slate-400">Type</TableHead>
                       <TableHead className="text-slate-400">Submitted</TableHead>
                       <TableHead className="text-slate-400">Evidence</TableHead>
-                      <TableHead className="text-slate-400">Actions</TableHead>
+                      <TableHead className="text-slate-400 text-right">Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {verifications.map((v) => (
-                      <TableRow key={v.id} className="hover:bg-slate-800/50">
+                    {pendingVerifications.map((v) => (
+                      <TableRow key={v.id} className="hover:bg-slate-800/50 transition-colors">
                         <TableCell className="text-white font-medium">
-                          {v.full_name || "Unnamed Seller"}
+                          {v.seller?.full_name || "Unnamed Seller"}
                         </TableCell>
                         <TableCell className="text-slate-300 break-all">
-                          {v.email || v.seller_id.substring(0, 8) + "..."}
+                          {v.seller?.email || v.seller_id.substring(0, 8) + "..."}
                         </TableCell>
-                        <TableCell className="text-slate-300 capitalize">{v.type}</TableCell>
                         <TableCell className="text-slate-300">
                           {formatDistanceToNow(new Date(v.submitted_at), { addSuffix: true })}
                         </TableCell>
@@ -215,51 +217,49 @@ export default function VerificationsAdmin() {
                           {v.evidence_urls && v.evidence_urls.length > 0 ? (
                             <div className="flex flex-wrap gap-2">
                               {v.evidence_urls.map((url, idx) => (
-                                <a
+                                <Button
                                   key={idx}
-                                  href={url}
-                                  target="_blank"
-                                  rel="noopener noreferrer"
-                                  className="text-blue-400 hover:underline text-sm"
+                                  variant="outline"
+                                  size="sm"
+                                  onClick={() => viewEvidence(url)}
                                 >
-                                  Evidence {idx + 1}
-                                </a>
+                                  <Eye className="h-4 w-4 mr-1" />
+                                  View {idx + 1}
+                                </Button>
                               ))}
                             </div>
                           ) : (
-                            "No evidence uploaded"
+                            "No documents"
                           )}
                         </TableCell>
-                        <TableCell>
-                          <div className="flex gap-2">
-                            <Button
-                              variant="default"
-                              size="sm"
-                              onClick={() => handleApproveClick(v)}
-                              disabled={approveMutation.isPending}
-                              className="bg-green-600 hover:bg-green-700"
-                            >
-                              {approveMutation.isPending && selectedVer?.id === v.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                              ) : (
-                                <CheckCircle className="h-4 w-4 mr-2" />
-                              )}
-                              Approve
-                            </Button>
-                            <Button
-                              variant="destructive"
-                              size="sm"
-                              onClick={() => handleRejectClick(v)}
-                              disabled={rejectMutation.isPending}
-                            >
-                              {rejectMutation.isPending && selectedVer?.id === v.id ? (
-                                <Loader2 className="h-4 w-4 animate-spin mr-2" />
-                              ) : (
-                                <XCircle className="h-4 w-4 mr-2" />
-                              )}
-                              Reject
-                            </Button>
-                          </div>
+                        <TableCell className="text-right space-x-2">
+                          <Button
+                            variant="default"
+                            size="sm"
+                            onClick={() => handleApproveClick(v)}
+                            disabled={approveMutation.isPending}
+                            className="bg-green-600 hover:bg-green-700"
+                          >
+                            {approveMutation.isPending && selectedVer?.id === v.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            ) : (
+                              <CheckCircle className="h-4 w-4 mr-2" />
+                            )}
+                            Approve
+                          </Button>
+                          <Button
+                            variant="destructive"
+                            size="sm"
+                            onClick={() => handleRejectClick(v)}
+                            disabled={rejectMutation.isPending}
+                          >
+                            {rejectMutation.isPending && selectedVer?.id === v.id ? (
+                              <Loader2 className="h-4 w-4 animate-spin mr-2" />
+                            ) : (
+                              <XCircle className="h-4 w-4 mr-2" />
+                            )}
+                            Reject
+                          </Button>
                         </TableCell>
                       </TableRow>
                     ))}
@@ -271,16 +271,17 @@ export default function VerificationsAdmin() {
         </Card>
 
         {/* Confirm Approve Dialog */}
-        <Dialog open={confirmOpen} onOpenChange={setConfirmOpen}>
+        <Dialog open={confirmApproveOpen} onOpenChange={setConfirmApproveOpen}>
           <DialogContent>
             <DialogHeader>
               <DialogTitle>Approve Verification?</DialogTitle>
               <DialogDescription>
-                This will mark the seller as verified and approve their application.
+                This will mark the seller as verified and grant them the verified badge.
+                This action cannot be undone.
               </DialogDescription>
             </DialogHeader>
             <DialogFooter>
-              <Button variant="outline" onClick={() => setConfirmOpen(false)}>
+              <Button variant="outline" onClick={() => setConfirmApproveOpen(false)}>
                 Cancel
               </Button>
               <Button
@@ -307,16 +308,20 @@ export default function VerificationsAdmin() {
             <DialogHeader>
               <DialogTitle>Reject Verification</DialogTitle>
               <DialogDescription>
-                Provide a reason for rejection (minimum 10 characters).
+                Provide a clear reason for rejection (minimum 10 characters).
+                The seller will see this reason.
               </DialogDescription>
             </DialogHeader>
             <div className="space-y-4 py-4">
               <Textarea
-                placeholder="Enter rejection reason..."
+                placeholder="Enter rejection reason... (e.g., Missing valid ID, Blurry documents, etc.)"
                 value={rejectReason}
                 onChange={(e) => setRejectReason(e.target.value)}
-                className="min-h-[100px]"
+                className="min-h-[120px]"
               />
+              {rejectReason.trim().length > 0 && rejectReason.trim().length < 10 && (
+                <p className="text-red-400 text-sm">Reason must be at least 10 characters</p>
+              )}
             </div>
             <DialogFooter>
               <Button variant="outline" onClick={() => setRejectOpen(false)}>
