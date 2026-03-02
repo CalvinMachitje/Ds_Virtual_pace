@@ -12,22 +12,12 @@ from flask_limiter.util import get_remote_address
 from app.services.supabase_service import supabase
 from datetime import datetime, timedelta
 import re, logging, time
-from app.utils.audit import log_action  # your audit helper
-from app import redis_client, socketio  # assuming exported from __init__.py
+from app.utils.audit import log_action
+from app.extensions import safe_redis_call, limiter
 
 bp = Blueprint("auth", __name__, url_prefix="/api/auth")
 logger = logging.getLogger(__name__)
 
-# Redis-backed rate limiter
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri="redis://localhost:6379/1",  # adjust to your REDIS_URL
-)
-
-ALLOWED_REDIRECT_DOMAINS = [
-    "localhost:5173",
-    "196.253.26.122:5173"
-]
 
 def is_strong_password(password: str) -> tuple[bool, str]:
     """Return (is_valid, error_message)"""
@@ -150,8 +140,8 @@ def login():
     lock_key = f"login_lock:{email}:{ip}"
 
     # 1. Check if account is locked
-    if redis_client.exists(lock_key):
-        ttl = redis_client.ttl(lock_key)
+    if safe_redis_call("exists", lock_key):
+        ttl = safe_redis_call("ttl", lock_key, default=0)
         return jsonify({
             "error": f"Too many failed attempts. Try again in {ttl // 60 + 1} minutes"
         }), 429
@@ -164,11 +154,11 @@ def login():
 
         if not auth_resp.user:
             # Failed attempt → increment counter
-            fails = redis_client.incr(fail_key)
-            redis_client.expire(fail_key, 3600)  # 1 hour window
+            fails = safe_redis_call("incr", fail_key, default=0)
+            safe_redis_call("expire", fail_key, 3600)  # 1 hour window
 
             if fails >= 10:
-                redis_client.setex(lock_key, 3600, "locked")  # 1 hour lockout
+                safe_redis_call("setex", lock_key, 3600, "locked")  # 1 hour lockout
                 log_action(None, "account_locked", details={"email": email, "ip": ip, "fails": fails})
                 return jsonify({
                     "error": "Too many failed attempts. Account locked for 1 hour"
@@ -222,8 +212,8 @@ def login():
                 return jsonify({"error": "2FA verification failed"}), 401
 
         # Reset failed attempts on success
-        redis_client.delete(fail_key)
-        redis_client.delete(lock_key)
+        safe_redis_call("delete", fail_key)
+        safe_redis_call("delete", lock_key)
 
         access = create_access_token(identity=user.id)
         refresh = create_refresh_token(identity=user.id)
@@ -251,10 +241,10 @@ def login():
         logger.error(f"Login failed for {email}: {error_str}", exc_info=True)
 
         # Count failed attempt even on exception
-        fails = redis_client.incr(fail_key)
-        redis_client.expire(fail_key, 3600)
+        fails = safe_redis_call("incr", fail_key, default=0)
+        safe_redis_call("expire", fail_key, 3600)
         if fails >= 10:
-            redis_client.setex(lock_key, 3600, "locked")
+            safe_redis_call("setex", lock_key, 3600, "locked")
 
         return jsonify({"error": "Login failed. Please try again later."}), 500
 
@@ -281,27 +271,40 @@ def admin_login():
     fail_key = f"admin_fail:{email}:{ip}"
     lock_key = f"admin_lock:{email}:{ip}"
 
-    # 1. Check if login is locked due to too many failures
-    if redis_client.exists(lock_key):
-        ttl = redis_client.ttl(lock_key)
+    # Helper to safely call Redis methods (prevents crash if safe_redis_call is None)
+    def safe_redis(method_name, *args, default=None):
+        if safe_redis_call is None:
+            logger.warning(f"Redis unavailable - skipping {method_name}")
+            return default
+        try:
+            method = getattr(safe_redis_call, method_name)
+            return method(*args)
+        except Exception as e:
+            logger.error(f"Redis {method_name} failed: {e}")
+            return default
+
+    # 1. Check if login is locked (safe Redis call)
+    if safe_redis("exists", lock_key, default=False):
+        ttl = safe_redis("ttl", lock_key, default=0)
         return jsonify({
             "error": f"Too many failed attempts. Admin login locked for {ttl // 60 + 1} minutes"
         }), 429
 
     try:
-        # 2. Authenticate with Supabase Auth (email + password)
+        # 2. Authenticate with Supabase Auth
         auth_res = supabase.auth.sign_in_with_password({
             "email": email,
             "password": password
         })
 
-        if not auth_res.user:
-            # Failed login → increment failure counter
-            fails = redis_client.incr(fail_key)
-            redis_client.expire(fail_key, 1800)  # 30 min window
+        user = auth_res.user
+        if not user:
+            # Failed login → increment failure counter (safe)
+            fails = safe_redis("incr", fail_key, default=0) or 0
+            safe_redis("expire", fail_key, 1800)
 
             if fails >= 5:
-                redis_client.setex(lock_key, 1800, "locked")  # 30 min lock
+                safe_redis("setex", lock_key, 1800, "locked")
                 log_action(None, "admin_account_locked", details={
                     "email": email,
                     "ip": ip,
@@ -319,7 +322,8 @@ def admin_login():
             logger.warning(f"Admin login failed for {email}: invalid credentials")
             return jsonify({"error": "Invalid email or password"}), 401
 
-        user = auth_res.user
+        # DEBUG: Log real user ID from Supabase
+        logger.info(f"DEBUG_AUTH_ID: Authenticated user ID = {user.id}")
 
         # 3. Check if this user has an admin record
         admin_res = supabase.table("admins")\
@@ -329,10 +333,10 @@ def admin_login():
             .execute()
 
         # DEBUG: Log the raw result
-        logger.debug(f"Admin query result for {email} (id: {user.id}): {admin_res}")
+        logger.debug(f"DEBUG_ADMIN_QUERY: admin_res.data = {admin_res.data}")
+        logger.debug(f"DEBUG_ADMIN_ERROR: admin_res.error = {admin_res.error}")
 
         if not admin_res.data:
-            # No admin record → deny access
             log_action(None, "admin_login_denied", details={
                 "email": email,
                 "reason": "no_admin_record_found",
@@ -368,7 +372,7 @@ def admin_login():
                     "message": "2FA code required for admin login"
                 }), 200
 
-            # Verify OTP (adjust factor_id if needed)
+            # Verify OTP
             try:
                 verified = supabase.auth.mfa.verify({
                     "factor_id": "totp",  # ← change if you store real factor_id per user
@@ -380,9 +384,9 @@ def admin_login():
                 logger.error(f"Admin 2FA verification failed for {email}: {str(e)}")
                 return jsonify({"error": "2FA verification failed"}), 401
 
-        # 7. Success → reset failure counters
-        redis_client.delete(fail_key)
-        redis_client.delete(lock_key)
+        # 7. Success → reset failure counters (safe Redis)
+        safe_redis("delete", fail_key)
+        safe_redis("delete", lock_key)
 
         # 8. Update last login timestamp
         supabase.table("admins")\
@@ -430,11 +434,11 @@ def admin_login():
         error_str = str(e)
         logger.exception(f"Unexpected error during admin login for {email}")
 
-        # Count as failed attempt even on exception
-        fails = redis_client.incr(fail_key)
-        redis_client.expire(fail_key, 1800)
+        # Count as failed attempt even on exception (safe Redis)
+        fails = safe_redis("incr", fail_key, default=0) or 0
+        safe_redis("expire", fail_key, 1800)
         if fails >= 5:
-            redis_client.setex(lock_key, 1800, "locked")
+            safe_redis("setex", lock_key, 1800, "locked")
 
         log_action(None, "failed_admin_login", details={
             "email": email,
@@ -459,7 +463,7 @@ def logout():
     try:
         jti = get_jwt()["jti"]
         expires = get_jwt()["exp"] - int(datetime.utcnow().timestamp()) + 3600
-        redis_client.setex(f"blacklist:{jti}", expires, "true")
+        safe_redis_call("setex", f"blacklist:{jti}", expires, "true")
 
         log_action(
             actor_id=get_jwt_identity(),

@@ -6,7 +6,8 @@ from app.extensions import socketio
 from app.services.supabase_service import supabase
 import uuid
 import logging
-
+from postgrest import exceptions as postgrest_exceptions
+from app.extensions import safe_redis_call, limiter
 from app.utils.audit import log_action
 
 logger = logging.getLogger(__name__)

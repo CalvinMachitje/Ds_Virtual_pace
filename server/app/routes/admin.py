@@ -8,15 +8,13 @@ from app.utils.decorators import admin_required
 from datetime import datetime
 from typing import Dict, Any, List, Optional, Tuple
 import uuid, time, logging
-from flask_limiter import Limiter
+from app.extensions import safe_redis_call, limiter
 from flask_limiter.util import get_remote_address
+
 
 bp = Blueprint("admin", __name__, url_prefix="/api/admin")
 
 logger = logging.getLogger(__name__)
-
-# Rate limiter – assumes Limiter is initialized in __init__.py with Redis
-limiter = Limiter(key_func=get_remote_address)
 
 # =============================================================================
 # HELPERS

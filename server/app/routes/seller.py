@@ -15,6 +15,7 @@ import os
 import logging
 from app.utils.audit import log_action  # your audit helper
 import time
+from app.extensions import limiter  # Redis-backed rate limiter instance
 
 bp = Blueprint("seller", __name__, url_prefix="/api/seller")
 
@@ -23,11 +24,6 @@ logger = logging.getLogger(__name__)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 MAX_IMAGE_SIZE = 5 * 1024 * 1024  # 5MB
 
-# Redis-backed rate limiter
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri="redis://localhost:6379/1",  # or os.getenv("REDIS_URL")
-)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS

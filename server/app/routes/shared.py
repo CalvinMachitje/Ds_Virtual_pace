@@ -6,22 +6,14 @@ from flask_limiter.util import get_remote_address
 from app.services.supabase_service import supabase
 from datetime import datetime, timedelta
 import re, uuid, logging, time
-from app import redis_client
 from app.extensions import socketio
 from app.utils.audit import log_action
-from app.routes.auth import ALLOWED_REDIRECT_DOMAINS 
+from app.config import ALLOWED_REDIRECT_DOMAINS 
+from app.extensions import safe_redis_call, limiter
 
 bp = Blueprint("shared", __name__, url_prefix="/api")
 logger = logging.getLogger(__name__)
 
-
-
-# Rate limiter instance (Redis-backed)
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri="redis://localhost:6379/1",  # or use os.getenv("REDIS_URL")
-    default_limits=["200 per day", "50 per hour"]
-)
 
 # ────────────────────────────────────────────────
 # GET /api/gigs
@@ -240,7 +232,7 @@ def logout():
     try:
         jti = get_jwt()["jti"]
         expires = get_jwt()["exp"] - int(datetime.utcnow().timestamp()) + 3600  # remaining time + buffer
-        redis_client.setex(f"blacklist:{jti}", expires, "true")
+        safe_redis_call("setex", f"blacklist:{jti}", expires, "true")
 
         return jsonify({"message": "Logged out successfully"}), 200
 

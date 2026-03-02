@@ -12,6 +12,7 @@ import uuid, os , time, logging
 from app.utils.audit import log_action
 from app import socketio
 from postgrest import exceptions as postgrest_exceptions
+from app.extensions import safe_redis_call, limiter
 
 bp = Blueprint("buyer", __name__, url_prefix="/api/buyer")
 
@@ -20,11 +21,6 @@ logger = logging.getLogger(__name__)
 ALLOWED_EXTENSIONS = {'png', 'jpg', 'jpeg', 'gif', 'webp'}
 MAX_AVATAR_SIZE = 5 * 1024 * 1024  # 5MB
 
-# Redis-backed rate limiter
-limiter = Limiter(
-    key_func=get_remote_address,
-    storage_uri="redis://localhost:6379/1",  # adjust to your REDIS_URL
-)
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS

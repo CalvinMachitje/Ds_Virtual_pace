@@ -2,7 +2,7 @@
 from flask import request
 from flask_socketio import emit, join_room, leave_room
 from flask_jwt_extended import decode_token, get_jwt_identity
-from app.extensions import socketio, redis_client
+from app.extensions import safe_redis_call, socketio
 from app.services.supabase_service import supabase
 from datetime import datetime
 import logging
@@ -12,30 +12,24 @@ import time
 
 logger = logging.getLogger(__name__)
 
-# Redis client for rate limiting
-redis_client = Redis.from_url(os.getenv("REDIS_URL", "redis://localhost:6379/0"))
 
 # Rate limit settings - 8 messages per 60 seconds per user
 RATE_LIMIT_COUNT = 8
 RATE_LIMIT_WINDOW_SECONDS = 60
 
 def is_rate_limited(user_id: str) -> bool:
-    """Simple sliding window rate limit using Redis"""
     key = f"chat_rate_limit:{user_id}"
     now = time.time()
     
-    # Remove old timestamps
-    redis_client.zremrangebyscore(key, 0, now - RATE_LIMIT_WINDOW_SECONDS)
-    
-    # Count messages in window
-    count = redis_client.zcard(key)
+    # Safe Redis calls
+    safe_redis_call("zremrangebyscore", key, 0, now - RATE_LIMIT_WINDOW_SECONDS)
+    count = safe_redis_call("zcard", key, default=0) or 0
     
     if count >= RATE_LIMIT_COUNT:
         return True
     
-    # Add current timestamp
-    redis_client.zadd(key, {str(now): now})
-    redis_client.expire(key, RATE_LIMIT_WINDOW_SECONDS + 10)
+    safe_redis_call("zadd", key, {str(now): now})
+    safe_redis_call("expire", key, RATE_LIMIT_WINDOW_SECONDS + 10)
     
     return False
 
