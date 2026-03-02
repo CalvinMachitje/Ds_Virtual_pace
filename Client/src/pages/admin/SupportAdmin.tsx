@@ -1,3 +1,4 @@
+/* eslint-disable @typescript-eslint/no-explicit-any */
 // src/pages/admin/SupportAdmin.tsx
 import { useState } from "react";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
@@ -18,6 +19,9 @@ import { Input } from "@/components/ui/input";
 import { toast } from "sonner";
 import { Loader2, CheckCircle, AlertTriangle, XCircle, MessageSquare, Send, Eye, AlertCircle } from "lucide-react";
 import Skeleton from "react-loading-skeleton";
+import "react-loading-skeleton/dist/skeleton.css";
+import { formatDistanceToNow } from "date-fns";
+import { VisuallyHidden } from "@radix-ui/react-visually-hidden"; // add this import
 
 type Ticket = {
   id: string;
@@ -51,29 +55,45 @@ export default function SupportAdmin() {
   const [threadDialogOpen, setThreadDialogOpen] = useState(false);
 
   // Fetch all tickets
-  const { data: tickets = [], isLoading, error } = useQuery<Ticket[]>({
+  const { 
+    data: ticketsResponse, 
+    isLoading, 
+    error 
+  } = useQuery<any>({
     queryKey: ["admin-support"],
     queryFn: async () => {
       const res = await fetch("/api/admin/support", {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token") || ""}` },
       });
-      if (!res.ok) throw new Error("Failed to load tickets");
+
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        throw new Error(err.error || "Failed to load tickets");
+      }
+
       return res.json();
     },
   });
+
+  // Extract tickets array safely
+  const tickets: Ticket[] = Array.isArray(ticketsResponse?.tickets) 
+    ? ticketsResponse.tickets 
+    : Array.isArray(ticketsResponse) 
+      ? ticketsResponse 
+      : [];
 
   // Fetch thread/replies for selected ticket
   const { data: replies = [], isLoading: threadLoading } = useQuery<Reply[]>({
     queryKey: ["ticket-thread", selectedTicket?.id],
     queryFn: async () => {
-      if (!selectedTicket) return [];
+      if (!selectedTicket?.id) return [];
       const res = await fetch(`/api/admin/support/${selectedTicket.id}/thread`, {
         headers: { Authorization: `Bearer ${localStorage.getItem("access_token") || ""}` },
       });
       if (!res.ok) throw new Error("Failed to load thread");
       return res.json();
     },
-    enabled: !!selectedTicket && threadDialogOpen,
+    enabled: !!selectedTicket?.id && threadDialogOpen,
   });
 
   // Send reply mutation
@@ -164,7 +184,6 @@ export default function SupportAdmin() {
     setThreadDialogOpen(true);
   };
 
-
   if (error) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 text-red-400 p-6">
@@ -190,88 +209,92 @@ export default function SupportAdmin() {
             <CardTitle className="text-white">Tickets</CardTitle>
           </CardHeader>
           <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead className="text-slate-400">User</TableHead>
-                  <TableHead className="text-slate-400">Subject</TableHead>
-                  <TableHead className="text-slate-400">Created</TableHead>
-                  <TableHead className="text-slate-400">Status</TableHead>
-                  <TableHead className="text-slate-400">Actions</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tickets?.map((t) => (
-                  <TableRow key={t.id} className="hover:bg-slate-800/50">
-                    <TableCell className="text-white">
-                      {t.user_name || t.user_id.slice(0, 8) + "..."}
-                    </TableCell>
-                    <TableCell className="text-slate-300 font-medium">{t.subject}</TableCell>
-                    <TableCell className="text-slate-300">
-                      {new Date(t.created_at).toLocaleDateString()}
-                    </TableCell>
-                    <TableCell>
-                      <Badge
-                        variant={
-                          t.status === "open" ? "outline" :
-                          t.status === "resolved" ? "secondary" :
-                          t.status === "escalated" ? "destructive" : "default"
-                        }
-                        className={
-                          t.status === "resolved" ? "bg-green-600/20 text-green-400" :
-                          t.status === "escalated" ? "bg-red-600/20 text-red-400" : ""
-                        }
-                      >
-                        {t.status.charAt(0).toUpperCase() + t.status.slice(1)}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="space-x-2">
-                      {(t.status === "open" || t.status === "escalated") && (
-                        <>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => resolveTicket.mutate(t.id)}
-                            disabled={resolveTicket.isPending}
-                            className="border-green-600 text-green-400 hover:bg-green-950"
-                          >
-                            Resolve
-                          </Button>
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={() => handleEscalateClick(t)}
-                            disabled={t.status === "escalated"}
-                            className="border-orange-600 text-orange-400 hover:bg-orange-950"
-                          >
-                            Escalate
-                          </Button>
-                        </>
-                      )}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => openThread(t)}
-                        className="text-blue-400 hover:text-blue-300"
-                      >
-                        <Eye className="h-4 w-4 mr-1" />
-                        View Thread
-                      </Button>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-
-            {tickets?.length === 0 && (
+            {isLoading ? (
+              <div className="space-y-4">
+                <Skeleton className="h-16 w-full" count={5} />
+              </div>
+            ) : tickets.length === 0 ? (
               <div className="text-center py-12 text-slate-400">
                 No tickets found
               </div>
+            ) : (
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead className="text-slate-400">User</TableHead>
+                    <TableHead className="text-slate-400">Subject</TableHead>
+                    <TableHead className="text-slate-400">Created</TableHead>
+                    <TableHead className="text-slate-400">Status</TableHead>
+                    <TableHead className="text-slate-400">Actions</TableHead>
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {tickets.map((t) => (
+                    <TableRow key={t.id} className="hover:bg-slate-800/50">
+                      <TableCell className="text-white">
+                        {t.user_name || t.user_id.slice(0, 8) + "..."}
+                      </TableCell>
+                      <TableCell className="text-slate-300 font-medium">{t.subject}</TableCell>
+                      <TableCell className="text-slate-300">
+                        {new Date(t.created_at).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell>
+                        <Badge
+                          variant={
+                            t.status === "open" ? "outline" :
+                            t.status === "resolved" ? "secondary" :
+                            t.status === "escalated" ? "destructive" : "default"
+                          }
+                          className={
+                            t.status === "resolved" ? "bg-green-600/20 text-green-400" :
+                            t.status === "escalated" ? "bg-red-600/20 text-red-400" : ""
+                          }
+                        >
+                          {t.status.charAt(0).toUpperCase() + t.status.slice(1)}
+                        </Badge>
+                      </TableCell>
+                      <TableCell className="space-x-2">
+                        {(t.status === "open" || t.status === "escalated") && (
+                          <>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => resolveTicket.mutate(t.id)}
+                              disabled={resolveTicket.isPending}
+                              className="border-green-600 text-green-400 hover:bg-green-950"
+                            >
+                              Resolve
+                            </Button>
+                            <Button
+                              variant="outline"
+                              size="sm"
+                              onClick={() => handleEscalateClick(t)}
+                              disabled={t.status === "escalated"}
+                              className="border-orange-600 text-orange-400 hover:bg-orange-950"
+                            >
+                              Escalate
+                            </Button>
+                          </>
+                        )}
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => openThread(t)}
+                          className="text-blue-400 hover:text-blue-300"
+                        >
+                          <Eye className="h-4 w-4 mr-1" />
+                          View Thread
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
             )}
           </CardContent>
         </Card>
 
-        {/* Reply Input (shown when ticket selected) */}
+        {/* Reply Input */}
         {selectedTicket && (selectedTicket.status === "open" || selectedTicket.status === "escalated") && (
           <Card className="bg-slate-900/70 border-slate-700 mt-6">
             <CardHeader>
@@ -318,14 +341,16 @@ export default function SupportAdmin() {
                 <AlertTriangle className="h-5 w-5 text-orange-400" />
                 Escalate to Technical Team
               </DialogTitle>
-              <DialogDescription className="text-slate-400">
-                Use this when the issue requires developer/maintenance intervention.
-              </DialogDescription>
+              <VisuallyHidden>
+                <DialogDescription>
+                  Use this when the issue requires developer or technical intervention.
+                </DialogDescription>
+              </VisuallyHidden>
             </DialogHeader>
             <Textarea
               value={escalateNote}
               onChange={(e) => setEscalateNote(e.target.value)}
-              placeholder="Describe why this needs escalation (e.g., bug, payment failure, server error...)"
+              placeholder="Describe why this needs escalation..."
               className="min-h-[140px] bg-slate-800 text-white border-slate-700"
             />
             <DialogFooter>
@@ -348,12 +373,19 @@ export default function SupportAdmin() {
           <DialogContent className="max-w-2xl">
             <DialogHeader>
               <DialogTitle className="text-white">
-                Ticket Thread: {selectedTicket?.subject}
+                Ticket Thread: {selectedTicket?.subject || "Loading..."}
               </DialogTitle>
+              <VisuallyHidden>
+                <DialogDescription>
+                  View conversation history and replies for this support ticket.
+                </DialogDescription>
+              </VisuallyHidden>
             </DialogHeader>
             <div className="max-h-[60vh] overflow-y-auto space-y-4 py-4">
               {threadLoading ? (
-                <Skeleton count={3} height={80} />
+                <div className="space-y-4">
+                  <Skeleton className="h-20 w-full" count={3} />
+                </div>
               ) : replies.length === 0 ? (
                 <p className="text-center text-slate-500">No replies yet</p>
               ) : (

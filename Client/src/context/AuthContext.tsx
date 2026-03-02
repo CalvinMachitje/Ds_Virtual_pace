@@ -7,8 +7,8 @@ import React, {
   ReactNode,
 } from "react";
 import { toast } from "sonner";
+import { API_BASE_URL } from "@/lib/api";
 
-const API_BASE_URL = "http://localhost:5000" ;
 
 type SignUpParams = {
   email: string;

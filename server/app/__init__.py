@@ -1,13 +1,17 @@
-# server/app/__init__.py
+# app/__init__.py
 from datetime import timedelta
 from flask import Flask, jsonify
 from flask_cors import CORS
-from flask_socketio import SocketIO
-from flask_jwt_extended import JWTManager
-from dotenv import load_dotenv
-import os
-import logging
+from flask_jwt_extended import JWTManager, get_jwt
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
+import supabase
 from werkzeug.exceptions import HTTPException
+import logging
+import os
+from dotenv import load_dotenv
+
+from .extensions import socketio, redis_client
 
 logger = logging.getLogger(__name__)
 
@@ -34,9 +38,9 @@ def create_app():
 
     # CORS – explicit and safe
     frontend_origins = [
-        "https://gig-connect.vercel.app",
-        "https://*.gig-connect.vercel.app",
-        "http://localhost:5173",          # keep for dev
+        "http://196.253.26.123:5173",
+        "http://localhost:5173",
+        "*"  # Allow all origins (for development; restrict in production)
     ]
 
     CORS(app, resources={
@@ -49,20 +53,52 @@ def create_app():
         }
     })
 
+    # Explicit CORS for Socket.IO (fixes 400 on polling + origin errors)
+    CORS(app, resources={
+        r"/socket.io/*": {
+            "origins": frontend_origins,
+            "supports_credentials": True,
+            "allow_headers": ["Content-Type", "Authorization"],
+            "expose_headers": ["Authorization"],
+            "methods": ["GET", "POST", "OPTIONS"]
+        }
+    })
+
     jwt = JWTManager(app)
 
-    # SocketIO
-    redis_url = os.getenv("REDIS_URL", "redis://localhost:6379/0")
-    socketio = SocketIO(
+    # ── Rate Limiter (Redis-backed) ──────────────────────────────────────
+    limiter = Limiter(
+        app=app,
+        key_func=get_remote_address,
+        storage_uri=os.getenv("REDIS_URL", "redis://localhost:6379/1"),
+        default_limits=["200 per day", "50 per hour"],
+        storage_options={"socket_timeout": 5}
+    )
+
+    # JWT blocklist loader (real logout support)
+    @jwt.token_in_blocklist_loader
+    def check_if_token_revoked(jwt_header, jwt_payload):
+        try:
+            if not redis_client.ping():
+                logger.warning("Redis down – blocklist check skipped")
+                return False
+            jti = jwt_payload["jti"]
+            return redis_client.get(f"blacklist:{jti}") == "true"
+        except Exception as e:
+            logger.error(f"Blocklist check failed: {str(e)}")
+            return False
+
+    # Attach SocketIO (after app is created)
+    socketio.init_app(
         app,
         cors_allowed_origins=frontend_origins,
         async_mode="threading",
-        message_queue=redis_url,
+        message_queue=os.getenv("REDIS_URL", "redis://localhost:6379/0"),
         logger=True,
         engineio_logger=False
     )
 
-    # ── Register Blueprints (CORRECT paths) ──────────────────────────────
+    # ── Register Blueprints ──────────────────────────────────────────────
     try:
         from app.routes.auth import bp as auth_bp
         app.register_blueprint(auth_bp)
@@ -98,7 +134,6 @@ def create_app():
     except ImportError as e:
         logger.error(f"Shared blueprint import failed: {e}")
 
-    
     try:
         from app.routes.support import bp as support_bp
         app.register_blueprint(support_bp)
@@ -109,8 +144,13 @@ def create_app():
     # ── Health check endpoint ────────────────────────────────────────────
     @app.route("/api/health")
     def health():
+        redis_status = "ok" if redis_client.ping() else "down"
+        supabase_status = "ok" if supabase.client else "down"
+
         return jsonify({
             "status": "ok",
+            "redis": redis_status,
+            "supabase": supabase_status,
             "blueprints_loaded": list(app.blueprints.keys())
         }), 200
 
@@ -123,13 +163,13 @@ def create_app():
         logger.exception("Unhandled exception occurred")
         return jsonify({"error": "Internal server error"}), 500
 
-    return app, socketio
+    return app
 
 
-# Create app
-app, socketio = create_app()
+# Create and export app + socketio
+app = create_app()
 
-# SocketIO handlers
+# SocketIO handlers (import after app is created)
 from app.socket_handlers import init_socketio
 init_socketio(socketio)
 

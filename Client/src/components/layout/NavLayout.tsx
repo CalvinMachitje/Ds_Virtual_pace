@@ -195,7 +195,7 @@ export default function NavLayout({ children }: { children: React.ReactNode }) {
         path:
           userRole === "buyer" || userRole === "seller"
             ? "/messages"
-            : "/admin/support",
+            : "/admin/email",
         badge: unreadCount > 0 ? unreadCount : undefined,
         section: "account",
       },

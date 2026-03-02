@@ -1,24 +1,27 @@
 # app/routes/shared.py
 from flask import Blueprint, request, jsonify, current_app
-from flask_jwt_extended import jwt_required, get_jwt_identity
+from flask_jwt_extended import get_jwt, jwt_required, get_jwt_identity
+from flask_limiter import Limiter
+from flask_limiter.util import get_remote_address
 from app.services.supabase_service import supabase
 from datetime import datetime, timedelta
-import re
+import re, uuid, logging, time
+from app import redis_client
+from app.extensions import socketio
+from app.utils.audit import log_action
+from app.routes.auth import ALLOWED_REDIRECT_DOMAINS 
 
 bp = Blueprint("shared", __name__, url_prefix="/api")
+logger = logging.getLogger(__name__)
 
-# Allowed redirect domains for password reset
-ALLOWED_REDIRECT_DOMAINS = [
-    "localhost:5173",
-    "127.0.0.1:5173",
-    # Add your production domains here, e.g.:
-    # "yourapp.com",
-    # "www.yourapp.com",
-]
 
-# In-memory rate limit for forgot-password (demo only — use Redis + Flask-Limiter in production)
-reset_attempts = {}  # {email: {"count": int, "last_attempt": datetime}}
 
+# Rate limiter instance (Redis-backed)
+limiter = Limiter(
+    key_func=get_remote_address,
+    storage_uri="redis://localhost:6379/1",  # or use os.getenv("REDIS_URL")
+    default_limits=["200 per day", "50 per hour"]
+)
 
 # ────────────────────────────────────────────────
 # GET /api/gigs
@@ -85,10 +88,7 @@ def list_gigs():
         return jsonify({"error": "Failed to load gigs"}), 500
 
 
-# ────────────────────────────────────────────────
 # GET /api/gigs/:id
-# Public: Get single gig details
-# ────────────────────────────────────────────────
 @bp.route("/gigs/<string:id>", methods=["GET"])
 def get_gig(id: str):
     """
@@ -134,6 +134,7 @@ def get_gig(id: str):
 # Send password reset email (rate-limited)
 # ────────────────────────────────────────────────
 @bp.route("/auth/forgot-password", methods=["POST"])
+@limiter.limit("3 per hour")  # prevent abuse
 def forgot_password():
     data = request.get_json(silent=True) or {}
     email = data.get("email", "").strip().lower()
@@ -141,20 +142,13 @@ def forgot_password():
     if not email or not re.match(r"[^@]+@[^@]+\.[^@]+", email):
         return jsonify({"error": "Valid email required"}), 400
 
-    # Rate limit: max 3 attempts per email per hour
-    now = datetime.utcnow()
-    attempt = reset_attempts.get(email, {"count": 0, "last_attempt": now - timedelta(hours=1)})
-    if (now - attempt["last_attempt"]).total_seconds() < 3600:
-        if attempt["count"] >= 3:
-            return jsonify({"error": "Too many reset requests. Try again in 1 hour"}), 429
-    else:
-        attempt = {"count": 0, "last_attempt": now}
-
-    attempt["count"] += 1
-    attempt["last_attempt"] = now
-    reset_attempts[email] = attempt
-
     try:
+        # Optional: check if user exists (privacy: don't reveal)
+        user_check = supabase.table("profiles").select("id").eq("email", email).maybe_single().execute()
+        if not user_check.data:
+            # Still send (prevents email enumeration attack)
+            pass
+
         redirect_to = request.args.get("redirect_to", f"{request.host_url}reset-password")
         allowed = any(domain in redirect_to.lower() for domain in ALLOWED_REDIRECT_DOMAINS)
 
@@ -166,6 +160,9 @@ def forgot_password():
             email,
             redirect_to=redirect_to
         )
+
+        # Optional: log attempt
+        log_action(None, "forgot_password_attempt", details={"email": email})
 
         return jsonify({"message": "If the email exists, a reset link has been sent"}), 200
 
@@ -179,6 +176,7 @@ def forgot_password():
 # Reset password with token
 # ────────────────────────────────────────────────
 @bp.route("/auth/reset-password", methods=["POST"])
+@limiter.limit("5 per hour")
 def reset_password():
     data = request.get_json(silent=True) or {}
     token = data.get("token")
@@ -194,6 +192,8 @@ def reset_password():
         res = supabase.auth.update_user({"password": password})
 
         if res.user:
+            # Optional: log success
+            log_action(res.user.id, "password_reset_success")
             return jsonify({"message": "Password reset successful"}), 200
         else:
             return jsonify({"error": "Invalid or expired token"}), 400
@@ -232,23 +232,37 @@ def get_session():
 
 # ────────────────────────────────────────────────
 # POST /api/auth/logout
-# Server-side logout (optional – can be used with token blocklist)
+# Server-side logout with token blocklist
 # ────────────────────────────────────────────────
 @bp.route("/auth/logout", methods=["POST"])
 @jwt_required()
 def logout():
-    # Future: implement token revocation / blocklist if needed
-    return jsonify({"message": "Logged out successfully"}), 200
+    try:
+        jti = get_jwt()["jti"]
+        expires = get_jwt()["exp"] - int(datetime.utcnow().timestamp()) + 3600  # remaining time + buffer
+        redis_client.setex(f"blacklist:{jti}", expires, "true")
+
+        return jsonify({"message": "Logged out successfully"}), 200
+
+    except Exception as e:
+        current_app.logger.warning(f"Logout issue: {str(e)}")
+        return jsonify({"message": "Logged out"}), 200
 
 
 # ────────────────────────────────────────────────
 # GET /api/debug/supabase
-# Simple connection check (remove in production)
+# Simple connection check (remove or protect in production)
 # ────────────────────────────────────────────────
 @bp.route("/debug/supabase", methods=["GET"])
 def debug_supabase():
     try:
-        status = supabase.check_connection()
+        # Simple test query
+        test = supabase.table("profiles").select("count(*)", count="exact").execute()
+        status = {
+            "connected": True,
+            "row_count_profiles": test.count or 0,
+            "timestamp": datetime.utcnow().isoformat()
+        }
         return jsonify(status), 200
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"connected": False, "error": str(e)}), 500

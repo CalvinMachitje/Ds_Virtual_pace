@@ -1,6 +1,8 @@
+# server/app/socket_handlers.py
 from flask import request
 from flask_socketio import emit, join_room, leave_room
 from flask_jwt_extended import decode_token, get_jwt_identity
+from app.extensions import socketio, redis_client
 from app.services.supabase_service import supabase
 from datetime import datetime
 import logging
@@ -36,6 +38,25 @@ def is_rate_limited(user_id: str) -> bool:
     redis_client.expire(key, RATE_LIMIT_WINDOW_SECONDS + 10)
     
     return False
+
+# Force authentication on all Socket.IO connections
+@socketio.on("connect", namespace="/")
+def handle_connect_auth():
+    token = request.args.get("token") or request.cookies.get("access_token")
+    if not token:
+        emit("error", {"message": "Authentication token required"})
+        return False  # disconnects client
+
+    try:
+        decoded = decode_token(token)
+        user_id = decoded["sub"]
+        join_room(f"user_{user_id}")
+        emit("connected", {"message": "Real-time connected", "user_id": user_id})
+        logger.info(f"Socket authenticated: user {user_id} from {request.remote_addr}")
+    except Exception as e:
+        logger.error(f"Socket auth failed: {str(e)}")
+        emit("error", {"message": "Invalid or expired token"})
+        return False
 
 def init_socketio(socketio):
 
@@ -210,3 +231,12 @@ def init_socketio(socketio):
 
         except Exception as e:
             logger.error(f"Booking update broadcast failed: {str(e)}", exc_info=True)
+    
+    @socketio.on("subscribe_logs")
+    def handle_subscribe_logs():
+        join_room("admin_logs")
+        emit("logs_status", {"message": "Joined live logs room"})
+
+    @socketio.on("unsubscribe_logs")
+    def handle_unsubscribe_logs():
+        leave_room("admin_logs")

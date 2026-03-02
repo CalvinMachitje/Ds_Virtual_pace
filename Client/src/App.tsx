@@ -57,6 +57,7 @@ import SettingsAdmin from "./pages/admin/SettingsAdmin";
 import SupportAdmin from "./pages/admin/SupportAdmin";
 import LogsAdmin from "./pages/admin/LogsAdmin";
 import AdminProfile from "./pages/admin/AdminProfile";
+import EmailAdmin from "./pages/admin/EmailAdmin";
 
 // Isolated Admin Login
 import AdminLogin from "./pages/admin/AdminLogin";
@@ -64,6 +65,7 @@ import AdminLogin from "./pages/admin/AdminLogin";
 // Auth & Layout
 import { useAuth } from "@/context/AuthContext";
 import BottomNav from "@/components/layout/NavLayout";
+import OAuthCallback from "./pages/Auth/OAuthCallback";
 
 const queryClient = new QueryClient();
 
@@ -172,6 +174,7 @@ const App = () => {
             <Route path="/signup" element={<SignupPage />} />
             <Route path="/forgot-password" element={<ForgotPassword />} />
             <Route path="/reset-password" element={<ResetPassword />} />
+            <Route path="/auth/callback" element={<OAuthCallback />} />
 
             {/* Public marketplace routes */}
             <Route path="/gigs" element={<Gigs />} />
@@ -219,6 +222,7 @@ const App = () => {
                 <Route path="/admin/support" element={<SupportAdmin />} />
                 <Route path="/admin/logs" element={<LogsAdmin />} />
                 <Route path="/admin/profile" element={<AdminProfile />} />
+                <Route path="/admin/email" element={<EmailAdmin />} />
               </Route>
             </Route>
 

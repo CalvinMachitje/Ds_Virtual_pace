@@ -1,12 +1,12 @@
 # server/app.py
-from flask import Flask, jsonify
+from flask import Flask
 from flask_cors import CORS
-from app import create_app, socketio
+from app import create_app, socketio  # ← socketio is now global from extensions
 
-app = Flask(__name__)
+# Create the app instance
+app = create_app()
+
 CORS(app)
-
-app, socketio = create_app()
 
 if __name__ == "__main__":
     socketio.run(

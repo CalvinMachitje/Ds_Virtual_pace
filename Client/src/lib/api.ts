@@ -83,3 +83,5 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}): Pro
 
   return response.json();
 };
+
+export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://196.253.26.122:5000";

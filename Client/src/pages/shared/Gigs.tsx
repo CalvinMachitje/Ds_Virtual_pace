@@ -19,7 +19,7 @@ import {
 } from "@/components/ui/select";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
-import NavLayout from "@/components/layout/NavLayout"; // ← Added import
+import NavLayout from "@/components/layout/NavLayout";
 
 type Gig = {
   id: string;

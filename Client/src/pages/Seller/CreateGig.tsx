@@ -1,5 +1,8 @@
 /* eslint-disable @typescript-eslint/no-explicit-any */
-// src/pages/seller/CreateGig.tsx
+// This is the CreateGig page where sellers can create and publish new gigs.
+// It includes a form with fields for title, category, description, price, and an optional image gallery.
+// The form uses react-hook-form for state management and zod for validation. Upon submission, it sends a POST request to the server to create the gig.
+// src: Client/src/pages/Seller/CreateGig.tsx
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -20,7 +23,7 @@ import { useAuth } from "@/context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import { toast } from "sonner";
 import { Loader2, Upload, X, ArrowLeft } from "lucide-react";
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef } from "react";
 import { cn } from "@/lib/utils";
 
 // ── Schema ────────────────────────────────────────────────
@@ -32,7 +35,7 @@ const gigSchema = z.object({
     "Graphics & Design", "Programming & Tech", "Video & Animation",
     "Writing & Translation", "Digital Marketing", "Music & Audio",
     "Photography", "Business"
-  ]),
+  ], { required_error: "Please select a category" }),
   description: z.string().min(120, "Description must be at least 120 characters").max(5000),
   price: z.number().min(50, "Price must be at least R50").max(2000),
   gallery_urls: z.array(z.string().url()).max(5, "Maximum 5 images allowed").optional(),
@@ -41,46 +44,15 @@ const gigSchema = z.object({
 type GigForm = z.infer<typeof gigSchema>;
 
 export default function CreateGig() {
-  const { user, userRole } = useAuth();
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const navigate = useNavigate();
-
-  // Block unverified sellers
-  useEffect(() => {
-    if (userRole !== "seller" || !user?.id) return;
-
-    const checkVerification = async () => {
-      try {
-        const res = await fetch("/api/profile/me", {
-          headers: {
-            Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
-          },
-        });
-
-        if (!res.ok) {
-          const err = await res.json();
-          throw new Error(err.error || "Verification check failed");
-        }
-
-        const profile = await res.json();
-        if (!profile.is_verified) {
-          toast.error("You must be verified before creating gigs. Please wait for admin approval.");
-          navigate("/seller-profile");
-        }
-      } catch (err: any) {
-        toast.error("Could not verify your account status");
-        navigate("/seller-profile");
-      }
-    };
-
-    checkVerification();
-  }, [userRole, user?.id, navigate]);
 
   const form = useForm<GigForm>({
     resolver: zodResolver(gigSchema),
     defaultValues: {
       title: "",
-      category: "admin_support",
+      category: "admin_support",  // ← fixed: default value
       description: "",
       price: 250,
       gallery_urls: [],
@@ -88,55 +60,17 @@ export default function CreateGig() {
     mode: "onChange",
   });
 
-  const { register, handleSubmit, formState: { errors }, watch, setValue } = form;
+  const { register, handleSubmit, formState: { errors, isSubmitting }, watch, setValue, reset } = form;
 
   const galleryUrls = watch("gallery_urls") || [];
   const [previews, setPreviews] = useState<string[]>([]);
-  const [uploadProgress, setUploadProgress] = useState<Record<string, number>>({});
-  const [uploadingFiles, setUploadingFiles] = useState<string[]>([]);
+  const [uploading, setUploading] = useState(false);
 
-  const createGig = useMutation({
-    mutationFn: async (data: GigForm) => {
-      if (!user) throw new Error("Not authenticated");
-
-      const res = await fetch("/api/seller/gigs", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
-        },
-        body: JSON.stringify(data),
-      });
-
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to create gig");
-      }
-
-      return res.json();
-    },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["gigs"] });
-      toast.success("Gig created and published!");
-      navigate("/my-gigs");
-    },
-    onError: (err: any) => {
-      toast.error(err.message || "Failed to create gig");
-    },
-  });
-
-  const onSubmit = (data: GigForm) => {
-    createGig.mutate(data);
-  };
-
-  const titleLength = watch("title")?.length || 0;
-  const descLength = watch("description")?.length || 0;
-
-  // ── Gallery handling ────────────────────────────────────────────────
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // Handle file selection / drop
   const handleFiles = async (files: FileList | null) => {
-    if (!files) return;
+    if (!files || files.length === 0) return;
 
     const validFiles = Array.from(files).filter(
       (f) => f.type.startsWith("image/") && f.size <= 5 * 1024 * 1024
@@ -147,11 +81,10 @@ export default function CreateGig() {
       return;
     }
 
+    setUploading(true);
+
     const formData = new FormData();
     validFiles.forEach(file => formData.append("images", file));
-
-    const tempIds = validFiles.map(f => f.name);
-    setUploadingFiles(tempIds);
 
     try {
       const res = await fetch("/api/seller/gig-images", {
@@ -169,40 +102,53 @@ export default function CreateGig() {
 
       const { urls } = await res.json();
 
-      // Generate local previews
+      // Create local previews
       const newPreviews = validFiles.map(file => URL.createObjectURL(file));
       setPreviews(prev => [...prev, ...newPreviews]);
 
-      // Update form field with returned URLs
+      // Append URLs to form
       setValue("gallery_urls", [...galleryUrls, ...urls], { shouldValidate: true });
 
-      toast.success(`${urls.length} image(s) uploaded successfully`);
+      toast.success(`${urls.length} image(s) uploaded`);
     } catch (err: any) {
       toast.error(err.message || "Failed to upload images");
     } finally {
-      setUploadingFiles([]);
+      setUploading(false);
     }
   };
 
-  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-    handleFiles(e.dataTransfer.files);
+  const onSubmit = async (data: GigForm) => {
+    try {
+      const res = await fetch("/api/seller/gigs", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          Authorization: `Bearer ${localStorage.getItem("access_token") || ""}`,
+        },
+        body: JSON.stringify(data),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to create gig");
+      }
+
+      const result = await res.json();
+
+      toast.success("Gig created and published!");
+      queryClient.invalidateQueries({ queryKey: ["my-gigs"] });
+      navigate("/my-gigs");
+
+      // Optional: reset form
+      reset();
+      setPreviews([]);
+    } catch (err: any) {
+      toast.error(err.message || "Failed to create gig");
+    }
   };
 
-  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
-    e.preventDefault();
-    e.stopPropagation();
-  };
-
-  const removeImage = (index: number) => {
-    const updated = galleryUrls.filter((_, i) => i !== index);
-    setValue("gallery_urls", updated);
-    setPreviews(prev => {
-      URL.revokeObjectURL(prev[index]);
-      return prev.filter((_, i) => i !== index);
-    });
-  };
+  const titleLength = watch("title")?.length || 0;
+  const descLength = watch("description")?.length || 0;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-6 pb-24">
@@ -213,8 +159,6 @@ export default function CreateGig() {
           </Button>
           <h1 className="text-3xl font-bold text-white">Create a New Gig</h1>
         </div>
-
-        <p className="text-slate-400 mb-10">List your virtual assistant service and start earning</p>
 
         <Card className="bg-slate-900/70 border-slate-700 backdrop-blur-sm">
           <CardHeader>
@@ -254,7 +198,7 @@ export default function CreateGig() {
                   <SelectTrigger className="bg-slate-800 border-slate-600 text-white">
                     <SelectValue placeholder="Select category" />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="bg-slate-900 border-slate-700 text-white">
                     <SelectItem value="admin_support">Admin Support</SelectItem>
                     <SelectItem value="call_handling">Call Handling</SelectItem>
                     <SelectItem value="email_management">Email Management</SelectItem>
@@ -264,6 +208,14 @@ export default function CreateGig() {
                     <SelectItem value="social_media">Social Media</SelectItem>
                     <SelectItem value="web_research">Web Research</SelectItem>
                     <SelectItem value="other">Other</SelectItem>
+                    <SelectItem value="Graphics & Design">Graphics & Design</SelectItem>
+                    <SelectItem value="Programming & Tech">Programming & Tech</SelectItem>
+                    <SelectItem value="Video & Animation">Video & Animation</SelectItem>
+                    <SelectItem value="Writing & Translation">Writing & Translation</SelectItem>
+                    <SelectItem value="Digital Marketing">Digital Marketing</SelectItem>
+                    <SelectItem value="Music & Audio">Music & Audio</SelectItem>
+                    <SelectItem value="Photography">Photography</SelectItem>
+                    <SelectItem value="Business">Business</SelectItem>
                   </SelectContent>
                 </Select>
                 {errors.category && (
@@ -302,6 +254,7 @@ export default function CreateGig() {
                     id="price"
                     type="number"
                     min="50"
+                    step="0.01"
                     {...register("price", { valueAsNumber: true })}
                     className="pl-8 bg-slate-800 border-slate-600 text-white"
                   />
@@ -324,7 +277,14 @@ export default function CreateGig() {
                           variant="destructive"
                           size="icon"
                           className="absolute top-1 right-1 h-6 w-6 opacity-0 group-hover:opacity-100"
-                          onClick={() => removeImage(index)}
+                          onClick={() => {
+                            const updated = galleryUrls.filter((_, i) => i !== index);
+                            setValue("gallery_urls", updated);
+                            setPreviews(prev => {
+                              URL.revokeObjectURL(prev[index]);
+                              return prev.filter((_, i) => i !== index);
+                            });
+                          }}
                         >
                           <X className="h-4 w-4" />
                         </Button>
@@ -334,12 +294,18 @@ export default function CreateGig() {
                 )}
 
                 <div
-                  onDrop={handleDrop}
-                  onDragOver={handleDragOver}
+                  onDrop={(e) => {
+                    e.preventDefault();
+                    handleFiles(e.dataTransfer.files);
+                  }}
+                  onDragOver={(e) => {
+                    e.preventDefault();
+                  }}
                   className={cn(
-                    "border-2 border-dashed rounded-lg p-8 text-center transition-colors",
-                    uploadingFiles.length > 0 ? "border-blue-500 bg-blue-950/30" : "border-slate-600 hover:border-slate-400"
+                    "border-2 border-dashed rounded-lg p-8 text-center transition-colors cursor-pointer",
+                    uploading ? "border-blue-500 bg-blue-950/30" : "border-slate-600 hover:border-slate-400"
                   )}
+                  onClick={() => fileInputRef.current?.click()}
                 >
                   <Input
                     ref={fileInputRef}
@@ -348,35 +314,13 @@ export default function CreateGig() {
                     multiple
                     onChange={(e) => handleFiles(e.target.files)}
                     className="hidden"
-                    id="gallery-upload"
                   />
-                  <Label htmlFor="gallery-upload" className="cursor-pointer">
-                    <Upload className="mx-auto h-10 w-10 text-slate-400 mb-3" />
-                    <p className="text-slate-300">
-                      Drag & drop images or <span className="underline">click to browse</span>
-                    </p>
-                    <p className="text-xs text-slate-500 mt-2">PNG, JPG — max 5MB per image</p>
-                  </Label>
+                  <Upload className="mx-auto h-10 w-10 text-slate-400 mb-3" />
+                  <p className="text-slate-300">
+                    Drag & drop images or <span className="underline">click to browse</span>
+                  </p>
+                  <p className="text-xs text-slate-500 mt-2">PNG, JPG — max 5MB per image</p>
                 </div>
-
-                {uploadingFiles.length > 0 && (
-                  <div className="space-y-3 mt-4">
-                    {uploadingFiles.map((name) => (
-                      <div key={name} className="space-y-1">
-                        <div className="flex justify-between text-xs text-slate-400">
-                          <span>Uploading {name}...</span>
-                          <span>{uploadProgress[name] ?? 0}%</span>
-                        </div>
-                        <div className="h-1.5 bg-slate-700 rounded-full overflow-hidden">
-                          <div
-                            className="h-full bg-blue-600 transition-all duration-300"
-                            style={{ width: `${uploadProgress[name] ?? 0}%` }}
-                          />
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                )}
 
                 {errors.gallery_urls && (
                   <p className="text-red-400 text-sm">{errors.gallery_urls.message}</p>
@@ -395,16 +339,14 @@ export default function CreateGig() {
                 </Button>
                 <Button
                   type="submit"
-                  disabled={createGig.isPending || uploadingFiles.length > 0}
+                  disabled={isSubmitting || uploading}
                   className="flex-1 bg-gradient-to-r from-blue-600 to-indigo-600 hover:from-blue-700 hover:to-indigo-700 py-6 text-lg font-medium"
                 >
-                  {createGig.isPending ? (
+                  {isSubmitting || uploading ? (
                     <>
                       <Loader2 className="mr-2 h-5 w-5 animate-spin" />
                       Publishing Gig...
                     </>
-                  ) : uploadingFiles.length > 0 ? (
-                    "Uploading images..."
                   ) : (
                     "Publish Gig"
                   )}

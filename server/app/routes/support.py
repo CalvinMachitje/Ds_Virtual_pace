@@ -1,10 +1,21 @@
 # app/routes/support.py
+from datetime import datetime
 from flask import Blueprint, request, jsonify
 from flask_jwt_extended import jwt_required, get_jwt_identity
+from app.extensions import socketio
 from app.services.supabase_service import supabase
 import uuid
+import logging
+
+from app.utils.audit import log_action
+
+logger = logging.getLogger(__name__)
 
 bp = Blueprint("support", __name__, url_prefix="/api/support")
+
+# Assuming socketio is imported from your app factory
+# If not already global, import it like this:
+from app import socketio  # adjust based on your __init__.py structure
 
 # GET /api/support/my-tickets
 # Returns ONLY the authenticated user's own tickets
@@ -29,11 +40,10 @@ def get_my_tickets():
             .order("created_at", desc=True)\
             .execute()
 
-        # ← This line ensures the frontend always gets the expected shape
         return jsonify({"tickets": res.data or []}), 200
 
     except Exception as e:
-        # Also safe on error — prevents frontend crash
+        logger.exception("Failed to fetch user tickets")
         return jsonify({"tickets": [], "error": str(e)}), 500
 
 
@@ -50,7 +60,7 @@ def get_ticket_thread(ticket_id):
             .select("id, user_id, subject, description, status, created_at")\
             .eq("id", ticket_id)\
             .eq("user_id", user_id)\
-            .single()\
+            .maybe_single()\
             .execute()
 
         if not ticket_res.data:
@@ -58,7 +68,7 @@ def get_ticket_thread(ticket_id):
 
         ticket = ticket_res.data
 
-        # Fetch replies (no ownership filter needed here — replies belong to ticket)
+        # Fetch replies
         replies_res = supabase.table("support_replies")\
             .select("""
                 id,
@@ -69,7 +79,7 @@ def get_ticket_thread(ticket_id):
                 sender:profiles!sender_id (full_name as sender_name)
             """)\
             .eq("ticket_id", ticket_id)\
-            .order("created_at", desc=False)\
+            .order("created_at", asc=True)\
             .execute()
 
         return jsonify({
@@ -78,59 +88,62 @@ def get_ticket_thread(ticket_id):
         }), 200
 
     except Exception as e:
+        logger.exception(f"Failed to load ticket thread: {ticket_id}")
         return jsonify({"error": "Failed to load ticket thread"}), 500
 
 
 # POST /api/support
-# User creates a new support ticket — automatically assigned to current authenticated user
+# User creates a new support ticket
 @bp.route("/", methods=["POST"])
 @jwt_required()
 def create_support_ticket():
     user_id = get_jwt_identity()
-    data = request.get_json()
+    data = request.get_json(silent=True) or {}
 
     # Required fields
-    if not data or "subject" not in data or "description" not in data:
+    subject = (data.get("subject") or "").strip()
+    description = (data.get("description") or "").strip()
+
+    if not subject or not description:
         return jsonify({"error": "Subject and description are required"}), 400
 
-    subject = data.get("subject", "").strip()
-    description = data.get("description", "").strip()
-
-    # Validation
-    if not subject:
-        return jsonify({"error": "Subject cannot be empty"}), 400
     if len(subject) < 5:
         return jsonify({"error": "Subject must be at least 5 characters"}), 400
-
-    if not description:
-        return jsonify({"error": "Description cannot be empty"}), 400
     if len(description) < 20:
         return jsonify({"error": "Description must be at least 20 characters"}), 400
 
-    # Optional fields with defaults
-    priority = data.get("priority", "medium")  # low / medium / high
+    # Optional fields
+    priority = data.get("priority", "medium")
     if priority not in ["low", "medium", "high"]:
         priority = "medium"
 
-    category = data.get("category")  # e.g. "payment", "booking", "technical", "other"
+    category = data.get("category")
 
     try:
         ticket = {
             "id": str(uuid.uuid4()),
-            "user_id": user_id,                 # enforced: always current authenticated user
+            "user_id": user_id,
             "subject": subject,
             "description": description,
             "status": "open",
             "priority": priority,
-            "category": category or None,       # optional
+            "category": category,
             "created_at": "now()",
-            "last_activity": "now()"            # useful for sorting by recent activity
+            "last_activity": "now()"
         }
 
         res = supabase.table("support_tickets").insert(ticket).execute()
 
         if not res.data:
-            return jsonify({"error": "Failed to insert ticket into database"}), 500
+            return jsonify({"error": "Failed to create ticket"}), 500
+
+        # Log creation
+        log_action(
+            actor_id=user_id,
+            action="create_support_ticket",
+            target_id=None,
+            details={"ticket_id": ticket["id"], "subject": subject}
+        )
 
         return jsonify({
             "message": "Ticket created successfully",
@@ -138,45 +151,40 @@ def create_support_ticket():
         }), 201
 
     except Exception as e:
-        # Provide more helpful message if possible
-        error_msg = str(e)
-        if "duplicate key" in error_msg.lower():
-            error_msg = "Ticket creation failed due to duplicate entry"
-        elif "foreign key" in error_msg.lower():
-            error_msg = "Invalid user reference"
-        else:
-            error_msg = f"Database error: {error_msg}"
+        logger.exception("Failed to create support ticket")
+        return jsonify({"error": str(e)}), 500
 
-        return jsonify({"error": error_msg}), 500
 
 # PATCH /api/support/<ticket_id>/user-resolved
-# User can only resolve their own open tickets
+# User marks their own open ticket as resolved
 @bp.route("/<ticket_id>/user-resolved", methods=["PATCH"])
 @jwt_required()
 def user_mark_resolved(ticket_id):
     user_id = get_jwt_identity()
 
     try:
-        ticket_res = supabase.table("support_tickets")\
+        # Verify ownership and status
+        ticket = supabase.table("support_tickets")\
             .select("id, user_id, status")\
             .eq("id", ticket_id)\
-            .single()\
-            .execute()
+            .maybe_single().execute().data
 
-        if not ticket_res.data:
+        if not ticket:
             return jsonify({"error": "Ticket not found"}), 404
 
-        if ticket_res.data["user_id"] != user_id:
+        if ticket["user_id"] != user_id:
             return jsonify({"error": "You do not have permission to resolve this ticket"}), 403
 
-        if ticket_res.data["status"] != "open":
+        if ticket["status"] != "open":
             return jsonify({"error": "Only open tickets can be resolved by user"}), 400
 
+        # Update
         res = supabase.table("support_tickets")\
             .update({
                 "status": "resolved",
                 "resolved_at": "now()",
-                "resolved_by": user_id
+                "resolved_by": user_id,
+                "last_activity": "now()"
             })\
             .eq("id", ticket_id)\
             .execute()
@@ -184,7 +192,16 @@ def user_mark_resolved(ticket_id):
         if not res.data:
             return jsonify({"error": "Failed to resolve ticket"}), 500
 
+        # Log action
+        log_action(
+            actor_id=user_id,
+            action="user_resolve_ticket",
+            target_id=None,
+            details={"ticket_id": ticket_id}
+        )
+
         return jsonify({"message": "Ticket resolved by user"}), 200
 
     except Exception as e:
+        logger.exception(f"User resolve ticket failed: {ticket_id}")
         return jsonify({"error": "Failed to resolve ticket"}), 500
