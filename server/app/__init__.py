@@ -30,27 +30,32 @@ def create_app() -> Flask:
     app = Flask(__name__)
 
     # ────────────────────────────────
-    # 🔐 Configuration
+    # 🔐 Configuration – Load from .env with sane defaults
     # ────────────────────────────────
     jwt_secret = os.getenv("JWT_SECRET_KEY")
-    if not jwt_secret:
-        raise RuntimeError("JWT_SECRET_KEY not set")
+    if not jwt_secret or jwt_secret.strip() == "":
+        raise RuntimeError("JWT_SECRET_KEY is missing or empty in .env file")
 
     redis_url = os.getenv("REDIS_URL")
     if not redis_url:
-        raise RuntimeError("REDIS_URL must be set")
+        raise RuntimeError("REDIS_URL must be set in .env")
+
+    # Read expiry from .env, fallback to reasonable values
+    access_expires_min = int(os.getenv("JWT_ACCESS_TOKEN_EXPIRES_MINUTES", "10080"))  # 7 days default
+    refresh_expires_days = int(os.getenv("JWT_REFRESH_TOKEN_EXPIRES_DAYS", "30"))
 
     app.config.update(
         SECRET_KEY=os.getenv("SECRET_KEY") or os.urandom(32).hex(),
         JWT_SECRET_KEY=jwt_secret,
-        JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=45),
-        JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=7),
+        JWT_ACCESS_TOKEN_EXPIRES=timedelta(minutes=access_expires_min),
+        JWT_REFRESH_TOKEN_EXPIRES=timedelta(days=refresh_expires_days),
         JWT_TOKEN_LOCATION=["headers"],
-        JWT_COOKIE_SECURE=True,
+        JWT_COOKIE_SECURE=not app.debug,  # Secure in prod, False in dev
         JWT_COOKIE_SAMESITE="Strict",
         JWT_COOKIE_CSRF_PROTECT=True,
+        JWT_VERIFY_EXPIRATION=True,  # ← Force expiry validation during decode
         REDIS_URL=redis_url,
-        SESSION_COOKIE_SECURE=True,
+        SESSION_COOKIE_SECURE=not app.debug,
         SESSION_COOKIE_HTTPONLY=True,
         SESSION_COOKIE_SAMESITE="Strict",
         PERMANENT_SESSION_LIFETIME=timedelta(hours=1),
@@ -69,7 +74,7 @@ def create_app() -> Flask:
         "FRONTEND_ORIGINS",
         "http://localhost:5173,http://196.253.26.122:5173"
     ).split(",")
-    app.config["FRONTEND_ORIGINS"] = frontend_origins
+    app.config["FRONTEND_ORIGINS"] = [o.strip() for o in frontend_origins if o.strip()]
 
     # ────────────────────────────────
     # 🧠 Initialize extensions
@@ -77,12 +82,14 @@ def create_app() -> Flask:
     init_extensions(app)
 
     # ────────────────────────────────
-    # 🔒 JWT Blocklist
+    # 🔒 JWT Blocklist (using Redis)
     # ────────────────────────────────
     @jwt.token_in_blocklist_loader
     def check_if_token_revoked(jwt_header, jwt_payload):
         jti = jwt_payload.get("jti")
-        return redis_client.get(f"blacklist:{jti}") == "true" if redis_client else False
+        if not redis_client:
+            return False
+        return redis_client.get(f"blacklist:{jti}") == "true"
 
     # ────────────────────────────────
     # 📦 Register Blueprints
@@ -102,50 +109,30 @@ def create_app() -> Flask:
     app.register_blueprint(support_bp)
 
     # ────────────────────────────────
-    # 🆔 Request ID Middleware
+    # 🆔 Request ID Middleware + CORS
     # ────────────────────────────────
     @app.before_request
     def handle_options():
         if request.method == "OPTIONS":
-            # Return 204 immediately — do NOT let any other before_request run
             response = app.make_response(('', 204))
-            
-            # Very permissive for dev (tighten later)
             origin = request.headers.get("Origin")
-            if origin in app.config["FRONTEND_ORIGINS"] or "*" in app.config["FRONTEND_ORIGINS"]:
+            allowed = app.config["FRONTEND_ORIGINS"]
+            if origin in allowed or "*" in allowed:
                 response.headers["Access-Control-Allow-Origin"] = origin or "*"
                 response.headers["Access-Control-Allow-Credentials"] = "true"
                 response.headers["Access-Control-Allow-Methods"] = "GET, POST, PUT, PATCH, DELETE, OPTIONS"
                 response.headers["Access-Control-Allow-Headers"] = "Content-Type, Authorization, X-Requested-With, Accept"
-                response.headers["Access-Control-Max-Age"] = "86400"  # cache preflight 24h
+                response.headers["Access-Control-Max-Age"] = "86400"
             return response
 
     @app.after_request
     def add_cors_headers(response):
-        # Ensure credentials header is always set for CORS requests
-        if 'Access-Control-Allow-Origin' in response.headers:
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-        
-        # Also fix for error responses (Flask doesn't always apply CORS to them)
-        origin = request.headers.get('Origin')
-        if origin and origin in app.config.get('FRONTEND_ORIGINS', []):
-            response.headers['Access-Control-Allow-Origin'] = origin
-            response.headers['Access-Control-Allow-Credentials'] = 'true'
-        
-        return response
-
-    # ────────────────────────────────
-    # ⚡ Preflight OPTIONS handler for React / API CORS
-    # ────────────────────────────────
-    @app.before_request
-    def handle_options_preflight():
-        if request.method == "OPTIONS" and request.path.startswith("/api/"):
-            response = app.make_response(('', 204))
-            response.headers["Access-Control-Allow-Origin"] = ",".join(app.config.get("FRONTEND_ORIGINS", ["*"]))
-            response.headers["Access-Control-Allow-Methods"] = "GET,POST,PUT,PATCH,DELETE,OPTIONS"
-            response.headers["Access-Control-Allow-Headers"] = "Content-Type,Authorization,X-Requested-With"
+        origin = request.headers.get("Origin")
+        allowed = app.config["FRONTEND_ORIGINS"]
+        if origin in allowed or "*" in allowed:
+            response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
-            return response
+        return response
 
     # ────────────────────────────────
     # ❤️ Health Check
@@ -154,7 +141,7 @@ def create_app() -> Flask:
     def health():
         redis_status = "ok" if redis_client and redis_client.ping() else "failed"
         return jsonify({
-            "status": "ok",
+            "status": "ok" if redis_status == "ok" else "degraded",
             "redis": redis_status,
             "timestamp": datetime.utcnow().isoformat(),
         })
@@ -170,27 +157,9 @@ def create_app() -> Flask:
         return jsonify({"error": "Internal server error"}), 500
 
     # ────────────────────────────────
-    # ⚡ Socket.IO JWT Admin Auth
+    # ⚡ Socket.IO JWT Auth (moved to socket_handlers.py)
     # ────────────────────────────────
-    @socketio.on("connect")
-    def socket_connect(auth):
-        token = auth.get("token") if auth else None
-        from flask_jwt_extended import decode_token
-        try:
-            decoded = decode_token(token) if token else None
-        except Exception:
-            decoded = None
-        if not decoded or decoded.get("role") != "admin":
-            print("Socket rejected: invalid token")
-            return False  # disconnect
-        print(f"Socket connected: {decoded['sub']}")
-
-    @socketio.on("subscribe_logs")
-    def handle_subscribe_logs():
-        print("Admin subscribed to live logs")
-
-    @socketio.on("unsubscribe_logs")
-    def handle_unsubscribe_logs():
-        print("Admin unsubscribed from live logs")
+    # Note: The socket_connect, subscribe_logs, unsubscribe_logs handlers
+    # should be in socket_handlers.py – remove them from here if duplicated
 
     return app

@@ -3,10 +3,12 @@ from flask import Blueprint, current_app, request, jsonify
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
+    decode_token,
     jwt_required,
     get_jwt_identity,
     get_jwt
 )
+import jwt
 from app.services.supabase_service import supabase
 from datetime import datetime, timedelta
 import re, logging, time
@@ -370,13 +372,14 @@ def admin_login():
 
         # Generate JWT with admin claims
         access = create_access_token(
-            identity=user.id,
+            identity=str(user.id),
             additional_claims={
-                "role": "admin",
-                "admin_level": admin["admin_level"]
-            }
+                "role": user.role,
+                "admin_level": admin["admin_level"] if user.role == "admin" else None
+            },
+            expires_delta=timedelta(days=7) 
         )
-        refresh = create_refresh_token(identity=user.id)
+        refresh = create_refresh_token(identity=str(user.id))
 
         # Audit success
         log_action(user.id, "admin_login_success", details={
@@ -451,15 +454,34 @@ def logout():
 # POST /api/auth/refresh
 # ────────────────────────────────
 @bp.route("/refresh", methods=["POST"])
-@jwt_required(refresh=True)
-def refresh_token():
-    current_user_id = get_jwt_identity()
-    new_access_token = create_access_token(identity=current_user_id)
+def refresh():
+    data = request.get_json()
+    refresh_token = data.get("refresh_token")
+    if not refresh_token:
+        return jsonify({"error": "Refresh token required"}), 401
 
-    return jsonify({
-        "success": True,
-        "access_token": new_access_token
-    }), 200
+    try:
+        # Validate refresh token (no 'refresh=True' param!)
+        decoded = decode_token(refresh_token)
+        user_id = decoded.get("sub")
+        if not user_id:
+            raise ValueError("Missing user ID in refresh token")
+
+        # Create new access token
+        new_access = create_access_token(
+            identity=user_id,
+            additional_claims=decoded.get("additional_claims", {})
+        )
+
+        return jsonify({"access_token": new_access}), 200
+
+    except jwt.ExpiredSignatureError:
+        return jsonify({"error": "Refresh token expired"}), 401
+    except jwt.InvalidSignatureError:
+        return jsonify({"error": "Invalid refresh token signature"}), 401
+    except Exception as e:
+        logger.error(f"Refresh failed: {str(e)}")
+        return jsonify({"error": "Invalid refresh token"}), 401
 
 
 # ────────────────────────────────

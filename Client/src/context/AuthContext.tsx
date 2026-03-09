@@ -94,9 +94,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     loadAuth();
   }, []);
 
+  // Token refresh function
+  const refreshAccessToken = async (): Promise<string | null> => {
+    try {
+      const refreshToken = localStorage.getItem("refresh_token");
+      if (!refreshToken) throw new Error("No refresh token");
+
+      const res = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ refresh_token: refreshToken }),
+        credentials: "include",
+      });
+
+      if (!res.ok) {
+        const err = await safeParse(res);
+        throw new Error(err?.error || `Refresh failed (${res.status})`);
+      }
+
+      const data = await safeParse(res);
+      const newAccessToken = data?.access_token;
+
+      if (!newAccessToken) throw new Error("No new access token");
+
+      localStorage.setItem("access_token", newAccessToken);
+      setSession((prev: any) => ({ ...prev, access_token: newAccessToken }));
+
+      console.log("[Auth] Access token refreshed");
+      toast.success("Session refreshed");
+      return newAccessToken;
+    } catch (err: any) {
+      console.error("[Auth] Refresh failed:", err.message);
+      toast.error("Session expired – please log in again");
+      signOut();
+      return null;
+    }
+  };
+
   // Socket.IO – Connect ONLY after successful login
   useEffect(() => {
-    // No valid token/session → clean up
     if (!session?.access_token || !user?.id) {
       if (socket) {
         console.log("[Socket] No valid session/token → disconnecting");
@@ -107,17 +143,19 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       return;
     }
 
-    // Already connected → skip
-    if (socket?.connected) {
-      console.log("[Socket] Already connected – skipping new connection");
+    // Prevent duplicate connections
+    if (socket?.connected || socket?.connect) {
+      console.log("[Socket] Already connected/connecting – skipping");
       return;
     }
 
     console.log("[Socket] Establishing authenticated Socket.IO connection");
 
+    let currentToken = session.access_token;
+
     const newSocket = io(SOCKET_URL, {
       query: {
-        token: session.access_token, // Backend expects ?token=...
+        token: currentToken,
       },
       withCredentials: true,
       transports: ["websocket", "polling"],
@@ -130,15 +168,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
     newSocket.on("connect", () => {
       console.log(`[Socket] CONNECTED successfully! ID: ${newSocket.id}`);
-      newSocket.emit("join_buyer_room", user.id); // Optional: join private room
+      newSocket.emit("join_buyer_room", user.id);
       toast.success("Real-time updates enabled");
     });
 
-    newSocket.on("connect_error", (err: Error) => {
+    let isRefreshing = false;
+
+    newSocket.on("connect_error", async (err: Error) => {
       console.error("[Socket] Connection error:", err.message);
-      if (err.message.includes("invalid") || err.message.includes("token")) {
-        toast.error("Authentication failed – please log in again");
-        signOut(); // Auto-logout on auth failure
+
+      if (
+        err.message.includes("invalid") ||
+        err.message.includes("token") ||
+        err.message.includes("rejected") ||
+        err.message.includes("expired")
+      ) {
+        if (isRefreshing) return; // Prevent double refresh
+        isRefreshing = true;
+
+        console.log("[Socket] Token issue – attempting refresh");
+        const newToken = await refreshAccessToken();
+        isRefreshing = false;
+
+        if (newToken) {
+          newSocket.io.opts.query = { token: newToken };
+          newSocket.connect();
+        } else {
+          toast.error("Session expired – logged out");
+          signOut();
+        }
+      } else {
+        toast.error("Connection issue: " + (err.message || "Unknown"));
       }
     });
 
@@ -155,14 +215,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       toast.error("Real-time connection issue: " + (err.message || "Unknown"));
     });
 
-    // Optional: Server confirmation
     newSocket.on("connected", (data: any) => {
       console.log("[Socket] Server confirmed connection:", data);
     });
 
     setSocket(newSocket);
 
-    // Cleanup on unmount or session change
     return () => {
       console.log("[Socket] Cleaning up socket connection");
       newSocket.removeAllListeners();

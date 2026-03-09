@@ -2,6 +2,7 @@
 from flask import request
 from flask_socketio import emit, join_room, leave_room, disconnect
 from flask_jwt_extended import decode_token
+import jwt
 from app.extensions import safe_redis_call, socketio, redis_client
 from app.services.supabase_service import supabase
 from datetime import datetime
@@ -38,34 +39,68 @@ def is_rate_limited(user_id: str) -> bool:
 @socketio.on("connect")
 def handle_connect():
     """Authenticate Socket.IO connection via JWT token from query or header."""
-    # Prefer Authorization header, fallback to ?token=
-    token = request.headers.get("Authorization", "").replace("Bearer ", "") or request.args.get("token")
+    token = request.args.get("token") or \
+            request.headers.get("Authorization", "").replace("Bearer ", "")
+
+    logger.info("Socket connect attempt - token (first 50 chars): %s", 
+                token[:50] + "..." if token else "NO TOKEN")
 
     if not token:
-        logger.warning("Socket connect attempt without token")
+        logger.warning("No token provided")
         emit("error", {"message": "Authentication token required"})
         return disconnect()
 
     try:
         decoded = decode_token(token)
-        user_id = decoded.get("sub")  # JWT subject = user ID
+        logger.info("Token DECODED successfully!")
+        logger.debug("Full decoded token claims: %s", decoded)
 
+        user_id = decoded.get("sub")
         if not user_id:
-            raise ValueError("No user ID in token")
+            raise ValueError("Token missing 'sub' claim")
 
-        # Join private user room for targeted notifications
+        # Manual expiry check (decode_token does NOT auto-check expiry)
+        from datetime import datetime
+        exp = decoded.get("exp")
+        if exp:
+            exp_time = datetime.fromtimestamp(exp)
+            now = datetime.utcnow()
+            logger.info("Token expires at: %s (UTC), current time: %s", exp_time, now)
+            if exp_time < now:
+                raise jwt.ExpiredSignatureError("Token has expired")
+
+        logger.info("Token valid - user_id: %s", user_id)
+
         join_room(f"user_{user_id}")
-
         emit("connected", {
             "message": "Real-time connection established",
             "user_id": user_id
         })
+        logger.info("Socket AUTHENTICATED: user %s from %s", user_id, request.remote_addr)
 
-        logger.info(f"Socket authenticated: user {user_id} from {request.remote_addr}")
+    except jwt.ExpiredSignatureError as e:
+        logger.error("JWT Expired: %s", str(e))
+        emit("error", {"message": "Token has expired - please log in again"})
+        return disconnect()
+
+    except jwt.InvalidSignatureError as e:
+        logger.error("JWT Signature invalid: %s", str(e))
+        emit("error", {"message": "Invalid token signature"})
+        return disconnect()
+
+    except jwt.InvalidTokenError as e:
+        logger.error("JWT Invalid token: %s", str(e))
+        emit("error", {"message": "Invalid token"})
+        return disconnect()
+
+    except jwt.DecodeError as e:
+        logger.error("JWT Decode error (malformed token): %s", str(e))
+        emit("error", {"message": "Malformed token"})
+        return disconnect()
 
     except Exception as e:
-        logger.error(f"Socket auth failed: {str(e)}", exc_info=True)
-        emit("error", {"message": "Invalid or expired token"})
+        logger.error("Socket auth FAILED - unexpected error: %s", str(e), exc_info=True)
+        emit("error", {"message": f"Authentication failed: {str(e)}"})
         return disconnect()
 
 
