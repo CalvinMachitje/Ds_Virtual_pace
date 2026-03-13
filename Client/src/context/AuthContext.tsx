@@ -1,4 +1,4 @@
-// src/context/AuthContext.tsx
+// Client/src/context/AuthContext.tsx
 import React, {
   createContext,
   useContext,
@@ -9,6 +9,7 @@ import React, {
 import { toast } from "sonner";
 import { API_BASE_URL, SOCKET_URL } from "@/lib/api";
 import { io, Socket } from "socket.io-client";
+import { registerTokenHandler } from "@/lib/api";
 
 type SignUpParams = {
   email: string;
@@ -30,6 +31,13 @@ type AuthContextType = {
   isAdmin: boolean;
   adminLevel?: string | null;
   socket: Socket | null;
+
+  // NEW: OAuth / external token login helper
+  handleOAuthLogin: (data: {
+    access_token: string;
+    refresh_token?: string;
+    user: any;
+  }) => void;
 };
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
@@ -43,38 +51,47 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [adminLevel, setAdminLevel] = useState<string | null>(null);
   const [socket, setSocket] = useState<Socket | null>(null);
 
-  const safeParse = async (res: Response) => {
-    try {
-      return await res.json();
-    } catch {
-      return null;
+  // HELPER for OAuth / external login
+  const handleOAuthLogin = (data: {
+    access_token: string;
+    refresh_token?: string;
+    user?: any;
+  }) => {
+    localStorage.setItem("access_token", data.access_token);
+
+    if (data.refresh_token) {
+      localStorage.setItem("refresh_token", data.refresh_token);
+    }
+
+    setSession({ access_token: data.access_token });
+
+    if (data.user) {
+      setUser(data.user);
+      setUserRole(data.user.role);
+      setIsAdmin(data.user.role === "admin");
+      setAdminLevel(data.user.admin_level || null);
     }
   };
 
-  // Restore session from localStorage on mount
+  const safeParse = async (res: Response) => {
+    try { return await res.json(); } catch { return null; }
+  };
+
+  /** Restore session from localStorage */
   useEffect(() => {
     const loadAuth = async () => {
       setLoading(true);
       try {
         const accessToken = localStorage.getItem("access_token");
-        if (!accessToken) {
-          setLoading(false);
-          return;
-        }
+        if (!accessToken) { setLoading(false); return; }
 
         const res = await fetch(`${API_BASE_URL}/api/auth/me`, {
-          headers: {
-            Authorization: `Bearer ${accessToken}`,
-          },
+          headers: { Authorization: `Bearer ${accessToken}` },
           credentials: "include",
         });
 
-        if (!res.ok) {
-          throw new Error(`Session check failed: ${res.status}`);
-        }
-
         const data = await safeParse(res);
-        if (data?.user) {
+        if (res.ok && data?.user) {
           setSession({ access_token: accessToken });
           setUser(data.user);
           setUserRole(data.user.role);
@@ -86,15 +103,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       } catch (err) {
         console.error("Auth init error:", err);
         localStorage.clear();
-      } finally {
-        setLoading(false);
-      }
+      } finally { setLoading(false); }
     };
-
     loadAuth();
   }, []);
 
-  // Token refresh function
+  /** Refresh access token */
   const refreshAccessToken = async (): Promise<string | null> => {
     try {
       const refreshToken = localStorage.getItem("refresh_token");
@@ -114,7 +128,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       const data = await safeParse(res);
       const newAccessToken = data?.access_token;
-
       if (!newAccessToken) throw new Error("No new access token");
 
       localStorage.setItem("access_token", newAccessToken);
@@ -131,105 +144,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // Socket.IO – Connect ONLY after successful login
+  /** Socket.IO connection */
   useEffect(() => {
     if (!session?.access_token || !user?.id) {
-      if (socket) {
-        console.log("[Socket] No valid session/token → disconnecting");
-        socket.removeAllListeners();
-        socket.disconnect();
-        setSocket(null);
-      }
+      socket?.disconnect();
+      setSocket(null);
       return;
     }
 
-    // Prevent duplicate connections
-    if (socket?.connected || socket?.connect) {
-      console.log("[Socket] Already connected/connecting – skipping");
-      return;
-    }
-
-    console.log("[Socket] Establishing authenticated Socket.IO connection");
-
-    let currentToken = session.access_token;
+    if (socket?.connected || socket?.connect) return;
 
     const newSocket = io(SOCKET_URL, {
-      query: {
-        token: currentToken,
-      },
+      query: { token: session.access_token },
       withCredentials: true,
       transports: ["websocket", "polling"],
       reconnection: true,
       reconnectionAttempts: 5,
-      reconnectionDelay: 1000,
-      reconnectionDelayMax: 5000,
-      timeout: 20000,
     });
 
     newSocket.on("connect", () => {
-      console.log(`[Socket] CONNECTED successfully! ID: ${newSocket.id}`);
+      console.log(`[Socket] CONNECTED ID: ${newSocket.id}`);
       newSocket.emit("join_buyer_room", user.id);
       toast.success("Real-time updates enabled");
     });
 
-    let isRefreshing = false;
-
-    newSocket.on("connect_error", async (err: Error) => {
-      console.error("[Socket] Connection error:", err.message);
-
-      if (
-        err.message.includes("invalid") ||
-        err.message.includes("token") ||
-        err.message.includes("rejected") ||
-        err.message.includes("expired")
-      ) {
-        if (isRefreshing) return; // Prevent double refresh
-        isRefreshing = true;
-
-        console.log("[Socket] Token issue – attempting refresh");
+    newSocket.on("connect_error", async (err: any) => {
+      if (err.message?.includes("token")) {
         const newToken = await refreshAccessToken();
-        isRefreshing = false;
-
         if (newToken) {
           newSocket.io.opts.query = { token: newToken };
           newSocket.connect();
-        } else {
-          toast.error("Session expired – logged out");
-          signOut();
         }
-      } else {
-        toast.error("Connection issue: " + (err.message || "Unknown"));
       }
-    });
-
-    newSocket.on("disconnect", (reason: string) => {
-      console.warn("[Socket] Disconnected. Reason:", reason);
-      if (reason === "io server disconnect") {
-        console.log("[Socket] Server forced disconnect – attempting reconnect");
-        newSocket.connect();
-      }
-    });
-
-    newSocket.on("error", (err: any) => {
-      console.error("[Socket] Server error event:", err.message || err);
-      toast.error("Real-time connection issue: " + (err.message || "Unknown"));
-    });
-
-    newSocket.on("connected", (data: any) => {
-      console.log("[Socket] Server confirmed connection:", data);
     });
 
     setSocket(newSocket);
-
-    return () => {
-      console.log("[Socket] Cleaning up socket connection");
-      newSocket.removeAllListeners();
-      newSocket.disconnect();
-      setSocket(null);
-    };
+    return () => { newSocket.disconnect(); setSocket(null); };
   }, [session?.access_token, user?.id]);
 
-  // SIGN UP
+  /** SIGN UP */
   const signUp = async (params: SignUpParams) => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/auth/signup`, {
@@ -240,10 +193,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       const data = await safeParse(res);
-
-      if (!res.ok) {
-        throw new Error(data?.error || "Signup failed");
-      }
+      if (!res.ok) throw new Error(data?.error || "Signup failed");
 
       if (data?.email_confirmation_sent) {
         toast.info("Check your email to confirm your account");
@@ -252,13 +202,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("refresh_token", data.refresh_token);
-
       setSession({ access_token: data.access_token });
       setUser(data.user);
       setUserRole(data.user.role);
-      setIsAdmin(false);
-      setAdminLevel(null);
-
       toast.success("Account created successfully!");
       return { error: null };
     } catch (err: any) {
@@ -267,7 +213,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // USER LOGIN
+  /** SIGN IN */
   const signIn = async (email: string, password: string) => {
     try {
       const res = await fetch(`${API_BASE_URL}/api/auth/login`, {
@@ -278,19 +224,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       });
 
       const data = await safeParse(res);
-
-      if (!res.ok) {
-        throw new Error(data?.error || "Invalid credentials");
-      }
+      if (!res.ok) throw new Error(data?.error || "Invalid credentials");
 
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("refresh_token", data.refresh_token);
-
       setSession({ access_token: data.access_token });
       setUser(data.user);
       setUserRole(data.user.role);
       setIsAdmin(data.user.role === "admin");
       setAdminLevel(data.user.admin_level || null);
+
+      /** 2FA required */
+      if (data?.twofa_required) toast.info("Two-factor authentication required");
 
       toast.success("Logged in successfully");
       return { error: null };
@@ -300,11 +245,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  // ADMIN LOGIN – Improved error handling
+  /** ADMIN LOGIN */
   const adminLogin = async (email: string, password: string) => {
     try {
       setLoading(true);
-
       const res = await fetch(`${API_BASE_URL}/api/auth/admin-login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -312,29 +256,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         credentials: "include",
       });
 
-      let data;
-      try {
-        data = await safeParse(res);
-      } catch {
-        data = null;
-      }
-
-      if (!res.ok) {
-        if (res.status === 401) {
-          throw new Error("Invalid email or password");
-        }
-        if (res.status === 403) {
-          throw new Error("Not an admin account – please contact support");
-        }
-        if (res.status === 500 || res.status === 204) {
-          throw new Error("Server error during admin check – try again later");
-        }
-        throw new Error(data?.error || `Admin login failed (${res.status})`);
-      }
+      const data = await safeParse(res);
+      if (!res.ok) throw new Error(data?.error || "Admin login failed");
 
       localStorage.setItem("access_token", data.access_token);
       localStorage.setItem("refresh_token", data.refresh_token || "");
-
       setSession({ access_token: data.access_token });
       setUser(data.user);
       setUserRole("admin");
@@ -344,69 +270,74 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       toast.success(`Welcome back, Admin (${data.user.admin_level || "Standard"})`);
       return { error: null };
     } catch (err: any) {
-      let message = err.message || "Admin login failed. Please try again.";
-
-      if (message.includes("Not an admin account")) {
-        message = "This account is not registered as an admin.";
-      } else if (message.includes("Invalid email or password")) {
-        message = "Incorrect email or password.";
-      } else if (message.includes("Server error")) {
-        message = "Server issue – please try again later.";
-      }
-
-      toast.error(message);
-      console.error("[adminLogin] Error:", err);
-      return { error: new Error(message) };
-    } finally {
-      setLoading(false);
-    }
+      toast.error(err.message || "Admin login failed");
+      return { error: err };
+    } finally { setLoading(false); }
   };
 
-  // LOGOUT
+  /** LOGOUT */
   const signOut = async () => {
     try {
       await fetch(`${API_BASE_URL}/api/auth/logout`, {
         method: "POST",
-        headers: {
-          Authorization: `Bearer ${localStorage.getItem("access_token")}`,
-        },
+        headers: { Authorization: `Bearer ${localStorage.getItem("access_token")}` },
         credentials: "include",
       }).catch(() => {});
-
-      if (socket) {
-        console.log("[Socket] Logging out → disconnecting socket");
-        socket.removeAllListeners();
-        socket.disconnect();
-      }
-
+      socket?.disconnect();
       localStorage.clear();
-
-      setSession(null);
-      setUser(null);
-      setUserRole(null);
-      setIsAdmin(false);
-      setAdminLevel(null);
-      setSocket(null);
-
+      setSession(null); setUser(null); setUserRole(null); setIsAdmin(false); setAdminLevel(null); setSocket(null);
       toast.success("Logged out successfully");
     } catch (err) {
-      console.error("Logout error:", err);
-      toast.error("Logout failed – clearing session anyway");
-
-      if (socket) {
-        socket.removeAllListeners();
-        socket.disconnect();
-      }
-
+      console.error(err);
       localStorage.clear();
-      setSession(null);
-      setUser(null);
-      setUserRole(null);
-      setIsAdmin(false);
-      setAdminLevel(null);
-      setSocket(null);
+      setSession(null); setUser(null); setUserRole(null); setIsAdmin(false); setAdminLevel(null); setSocket(null);
+      toast.error("Logout failed – session cleared");
     }
   };
+
+  /** 2FA */
+  const send2FA = async () => {
+    await fetch(`${API_BASE_URL}/api/auth/twofa/setup`, { method: "POST", credentials: "include" });
+    toast.info("2FA setup initiated – check your authenticator app");
+  };
+  const verify2FA = async (code: string) => {
+    const res = await fetch(`${API_BASE_URL}/api/auth/twofa/verify`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ code }),
+      credentials: "include",
+    });
+    return res.ok;
+  };
+
+  /** OAuth */
+  const startOAuth = (provider: string) => {
+    window.location.href = `${API_BASE_URL}/api/auth/oauth/${provider}`;
+  };
+  const handleOAuthCallback = async (query: URLSearchParams) => {
+    const code = query.get("code");
+    const state = query.get("state");
+    if (!code || !state) throw new Error("Invalid OAuth callback");
+
+    const res = await fetch(`${API_BASE_URL}/api/auth/oauth/callback?code=${code}&state=${state}`, { credentials: "include" });
+    const data = await safeParse(res);
+    if (!res.ok || !data?.access_token) throw new Error(data?.error || "OAuth login failed");
+
+    localStorage.setItem("access_token", data.access_token);
+    localStorage.setItem("refresh_token", data.refresh_token || "");
+    setSession({ access_token: data.access_token });
+    setUser(data.user);
+    setUserRole(data.user.role);
+    setIsAdmin(data.user.role === "admin");
+    setAdminLevel(data.user.admin_level || null);
+
+    toast.success("OAuth login successful");
+  };
+
+  // REGISTER TOKEN HANDLER HERE
+  useEffect(() => {
+    registerTokenHandler(handleOAuthLogin);
+  }, []);
 
   return (
     <AuthContext.Provider
@@ -422,6 +353,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         isAdmin,
         adminLevel,
         socket,
+        handleOAuthLogin, // expose helper
       }}
     >
       {children}

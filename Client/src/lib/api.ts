@@ -1,6 +1,40 @@
-// src/lib/api.ts
-export const apiFetch = async (endpoint: string, options: RequestInit = {}): Promise<any> => {
-  // Helper to always get the freshest token
+// Client/src/lib/api.ts
+
+export const API_BASE_URL =
+  import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
+
+export const SOCKET_URL =
+  import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
+
+/**
+ * Central token handler (registered by AuthContext)
+ */
+let tokenHandler: ((data: {
+  access_token: string;
+  refresh_token?: string;
+  user?: any;
+}) => void) | null = null;
+
+/**
+ * AuthProvider registers this so apiFetch can update tokens globally
+ */
+export const registerTokenHandler = (
+  handler: (data: {
+    access_token: string;
+    refresh_token?: string;
+    user?: any;
+  }) => void
+) => {
+  tokenHandler = handler;
+};
+
+/**
+ * API Fetch wrapper
+ */
+export const apiFetch = async (
+  endpoint: string,
+  options: RequestInit = {}
+): Promise<any> => {
   const getAuthHeader = () => {
     const token = localStorage.getItem("access_token") || "";
     return token ? { Authorization: `Bearer ${token}` } : {};
@@ -12,16 +46,15 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}): Pro
     ...options.headers,
   };
 
-  // Use the defined base URL (prefer env var)
-  const base = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000"; // ← Changed default to localhost
-
-  let response = await fetch(`${base}${endpoint}`, {  // ← Use full URL (not proxy /api)
+  let response = await fetch(`${API_BASE_URL}${endpoint}`, {
     ...options,
     headers,
-    credentials: "include",  // Added: for cookies/sessions if backend uses them
+    credentials: "include",
   });
 
-  // Auto-refresh on 401 (good logic, but add check for refresh endpoint)
+  /**
+   * Automatic token refresh
+   */
   if (response.status === 401) {
     const refreshToken = localStorage.getItem("refresh_token");
 
@@ -32,12 +65,12 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}): Pro
       throw new Error("Session expired - no refresh token");
     }
 
-    const refreshRes = await fetch(`${base}/api/auth/refresh`, {  // ← Use base here too
+    const refreshRes = await fetch(`${API_BASE_URL}/api/auth/refresh`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
-        Authorization: `Bearer ${refreshToken}`,
       },
+      body: JSON.stringify({ refresh_token: refreshToken }),
       credentials: "include",
     });
 
@@ -48,20 +81,36 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}): Pro
       throw new Error("Refresh token invalid");
     }
 
-    const { access_token: newAccessToken } = await refreshRes.json();
+    const refreshData = await refreshRes.json();
 
-    // Save new token
-    localStorage.setItem("access_token", newAccessToken);
+    const newAccessToken = refreshData.access_token;
+    const newRefreshToken = refreshData.refresh_token;
 
-    // Rebuild headers with fresh token
+    /**
+     * Update via centralized handler
+     */
+    if (tokenHandler) {
+      tokenHandler({
+        access_token: newAccessToken,
+        refresh_token: newRefreshToken,
+      });
+    } else {
+      localStorage.setItem("access_token", newAccessToken);
+      if (newRefreshToken) {
+        localStorage.setItem("refresh_token", newRefreshToken);
+      }
+    }
+
+    /**
+     * Retry original request
+     */
     headers = {
       "Content-Type": "application/json",
-      ...getAuthHeader(),  // now uses new token
+      Authorization: `Bearer ${newAccessToken}`,
       ...options.headers,
     };
 
-    // Retry original request
-    response = await fetch(`${base}${endpoint}`, {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
       ...options,
       headers,
       credentials: "include",
@@ -70,6 +119,7 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}): Pro
 
   if (!response.ok) {
     let errData;
+
     try {
       errData = await response.json();
     } catch {
@@ -79,16 +129,16 @@ export const apiFetch = async (endpoint: string, options: RequestInit = {}): Pro
     const errorMessage =
       errData.error ||
       errData.msg ||
-      (response.status === 401 ? "Session expired - please log in again" :
-       response.status === 403 ? "Permission denied" :
-       response.status === 404 ? "Resource not found" :
-       `Request failed (${response.status})`);
+      (response.status === 401
+        ? "Session expired - please log in again"
+        : response.status === 403
+        ? "Permission denied"
+        : response.status === 404
+        ? "Resource not found"
+        : `Request failed (${response.status})`);
 
     throw new Error(errorMessage);
   }
 
   return response.json();
 };
-
-export const API_BASE_URL = import.meta.env.VITE_API_BASE_URL || "http://localhost:5000";
-export const SOCKET_URL = import.meta.env.VITE_SOCKET_URL || "http://localhost:5000";
