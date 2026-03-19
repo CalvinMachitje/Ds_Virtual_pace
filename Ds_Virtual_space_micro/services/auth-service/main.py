@@ -6,13 +6,13 @@ from dotenv import load_dotenv
 load_dotenv()
 
 # Make sure you are importing the function, not the module
-from app import create_app  # app/__init__.py defines create_app()
+from app import create_app
 
-app = create_app()  # This must return a Flask instance
+app = create_app()
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5001))
-    debug = app.config.get("DEBUG", False)  # This works only if app is Flask instance
+    debug = app.config.get("DEBUG", False)
 
     print("=" * 60)
     print(f"Starting Auth Service on http://0.0.0.0:{port}")
