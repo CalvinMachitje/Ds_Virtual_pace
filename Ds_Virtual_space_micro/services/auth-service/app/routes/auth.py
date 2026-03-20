@@ -1,4 +1,4 @@
-# app/routes/auth.py
+# services/auth-service/app/routes/auth.py
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 import jwt
 from pydantic import BaseModel, EmailStr
@@ -10,8 +10,9 @@ from app.dependencies.rate_limiter import limiter
 from app.services.supabase_service import supabase
 from app.utils.audit import log_action
 from app.utils.event_bus import publish_event
-from utils.redis_utils import safe_redis_call
-from utils.utils import blacklist_jwt, generate_tokens, is_strong_password
+from app.utils.redis_utils import safe_redis_call
+from app.utils.extensions import blacklist_jwt, generate_tokens, is_strong_password
+
 from .twofa import verify_2fa_code
 
 router = APIRouter(tags=["auth"])
@@ -189,13 +190,29 @@ async def login(data: LoginRequest, request: Request):
 async def refresh_token(data: RefreshRequest):
     try:
         payload = jwt.decode(data.refresh_token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
+
+        if payload.get("type") != "refresh":
+            raise HTTPException(401, detail="Invalid token type")
+
         user_id = payload.get("sub")
-        if not user_id:
-            raise ValueError("Invalid refresh token")
-        access_token, _ = generate_tokens(user_id)
-        publish_event("auth.events", {"event": "access_token_refreshed", "user_id": user_id})
-        return {"access_token": access_token}
-    except Exception as e:
+        jti = payload.get("jti")
+
+        # blacklist old refresh token (rotation)
+        safe_redis_call("setex", f"blacklist:{jti}", 86400, "true")
+
+        access_token, new_refresh_token = generate_tokens(user_id)
+
+        publish_event("auth.events", {
+            "event": "token_refreshed",
+            "user_id": user_id
+        })
+
+        return {
+            "access_token": access_token,
+            "refresh_token": new_refresh_token
+        }
+
+    except Exception:
         raise HTTPException(401, detail="Invalid or expired refresh token")
 
 

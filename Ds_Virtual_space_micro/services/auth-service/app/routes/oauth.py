@@ -1,12 +1,12 @@
 # services/auth-service/app/routes/oauth.py
-from fastapi import APIRouter, Request, HTTPException, Query
+from fastapi import Request, HTTPException, Query, APIRouter
 from pydantic import BaseModel
 from typing import Optional
 
 from app.services.supabase_service import supabase
 from app.utils.audit import log_action
 from app.utils.event_bus import publish_event
-from utils.utils import generate_tokens
+from app.utils.extensions import generate_tokens
 
 
 router = APIRouter(prefix="/oauth", tags=["oauth"])

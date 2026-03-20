@@ -1,11 +1,12 @@
-# services/auth-service/app/utils/utils.py
+# services/auth-service/app/utils/extensions.py
 import re
 from datetime import datetime, timedelta, timezone
+import uuid
 from jose import jwt
 from app.core.config import settings
 
 from app.utils.audit import log_action
-from utils.redis_utils import safe_redis_call
+from app.utils.redis_utils import safe_redis_call
 
 
 
@@ -25,24 +26,33 @@ def is_strong_password(password: str) -> tuple[bool, str]:
 
 def generate_tokens(user_id: str, additional_claims: dict | None = None) -> tuple[str, str]:
     claims = additional_claims or {}
+
+    jti_access = str(uuid.uuid4())
+    jti_refresh = str(uuid.uuid4())
+
     access_token = jwt.encode(
         {
             "sub": user_id,
+            "jti": jti_access,
+            "type": "access",
             "exp": datetime.now(timezone.utc) + timedelta(minutes=settings.JWT_ACCESS_TOKEN_EXPIRES_MINUTES),
             **claims
         },
         settings.JWT_SECRET_KEY,
         algorithm="HS256"
     )
+
     refresh_token = jwt.encode(
         {
             "sub": user_id,
+            "jti": jti_refresh,
+            "type": "refresh",
             "exp": datetime.now(timezone.utc) + timedelta(days=settings.JWT_REFRESH_TOKEN_EXPIRES_DAYS),
-            "type": "refresh"
         },
         settings.JWT_SECRET_KEY,
         algorithm="HS256"
     )
+
     return access_token, refresh_token
 
 

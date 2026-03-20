@@ -1,45 +1,46 @@
-// src/pages/shared/ForgotPassword.tsx
+// src/pages/Auth/ForgotPasswordPage.tsx
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
 import { ArrowLeft, Mail } from "lucide-react";
-import { Link } from "react-router-dom";
-import { toast } from "sonner";
+import { API_BASE_URL } from "@/lib/api";
 
-export default function ForgotPassword() {
-  const [email, setEmail] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
-  const [loading, setLoading] = useState(false);
-
+export default function ForgotPasswordPage() {
   const navigate = useNavigate();
+  const [email, setEmail] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
     setLoading(true);
 
+    if (!email.trim()) {
+      setError("Please enter your email");
+      setLoading(false);
+      return;
+    }
+
     try {
-      const res = await fetch("/api/auth/forgot-password", {
+      const res = await fetch(`${API_BASE_URL}/api/auth/forgot-password`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
+        headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ email: email.trim() }),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to send reset link");
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to send reset link");
 
       setSuccess(true);
       toast.success("Reset link sent! Check your email.");
     } catch (err: any) {
-      setError(err.message || "Something went wrong");
+      setError(err.message || "Failed to send reset link");
       toast.error(err.message || "Failed to send reset link");
     } finally {
       setLoading(false);
@@ -76,7 +77,7 @@ export default function ForgotPassword() {
           </Link>
           <CardTitle className="text-3xl font-bold text-white">Forgot Password?</CardTitle>
           <CardDescription className="text-slate-400">
-            Don't worry, it happens. Please enter the email address associated with your account.
+            Don't worry, it happens. Enter the email associated with your account.
           </CardDescription>
         </CardHeader>
 
@@ -98,6 +99,7 @@ export default function ForgotPassword() {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 className="pl-11 bg-slate-800/60 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500"
+                disabled={loading}
               />
             </div>
           </div>

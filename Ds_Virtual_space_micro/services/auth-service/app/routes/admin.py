@@ -8,9 +8,10 @@ from app.dependencies.rate_limiter import limiter
 from app.services.supabase_service import supabase
 from app.utils.audit import log_action
 from app.utils.event_bus import publish_event
+from app.utils.extensions import generate_tokens
 from .twofa import verify_2fa_code
-from utils.redis_utils import safe_redis_call
-from utils.utils import generate_tokens
+from app.utils.redis_utils import safe_redis_call
+
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 

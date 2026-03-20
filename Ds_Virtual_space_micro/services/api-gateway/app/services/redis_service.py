@@ -1,4 +1,4 @@
-# services/auth-service/app/utils/redis_utils.py
+# app/services/redis_service.py
 import os
 import logging
 from typing import Any, Optional
@@ -11,6 +11,9 @@ redis_client: Optional[redis.Redis] = None
 
 
 def init_redis():
+    """
+    Initialize Redis connection.
+    """
     global redis_client
     if redis_client is not None:
         return
@@ -34,6 +37,10 @@ def init_redis():
 
 
 def safe_redis_call(method_name: str, *args, default: Any = None, **kwargs) -> Any:
+    """
+    Safely call Redis method with optional kwargs.
+    Returns `default` on failure or if Redis is unavailable.
+    """
     if redis_client is None:
         logger.warning(f"Redis unavailable - {method_name} skipped")
         return default
@@ -43,3 +50,7 @@ def safe_redis_call(method_name: str, *args, default: Any = None, **kwargs) -> A
     except Exception as e:
         logger.error(f"Redis call failed ({method_name}): {e}")
         return default
+
+
+# Initialize Redis on import
+init_redis()

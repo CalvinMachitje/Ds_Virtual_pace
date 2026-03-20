@@ -16,18 +16,21 @@ from app.routes.oauth import router as oauth_router
 from app.routes.twofa import router as twofa_router
 from app.services.supabase_service import supabase
 from app.utils.event_bus import publish_event
+from app.utils.redis_utils import init_redis
+from datetime import datetime
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Startup
+    init_redis()
+
     publish_event("auth.events", {
         "event": "service_started",
         "service": "auth-service",
-        "timestamp": os.getenv("START_TIME", "unknown")
     })
+
     yield
-    # Shutdown
+
     publish_event("auth.events", {
         "event": "service_stopped",
         "service": "auth-service"

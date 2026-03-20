@@ -2,7 +2,7 @@
 import logging
 from datetime import datetime
 
-from .redis_utils import safe_redis_call
+from app.utils.redis_utils import safe_redis_call
 
 
 logger = logging.getLogger(__name__)

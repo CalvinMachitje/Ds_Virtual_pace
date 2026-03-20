@@ -1,6 +1,6 @@
-// src/pages/Auth/SignupPage.tsx
+// Client/src/pages/Auth/SignupPage.tsx
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -8,11 +8,13 @@ import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle }
 import { Checkbox } from "@/components/ui/checkbox";
 import { Separator } from "@/components/ui/separator";
 import { User, Mail, Lock, Eye, EyeOff, ArrowLeft, Phone, Facebook, Chrome, Loader2 } from "lucide-react";
-import { useAuth } from "@/context/AuthContext";
-import { Link } from "react-router-dom";
 import { toast } from "sonner";
+import { useAuth } from "@/context/AuthContext";
 
 export default function SignupPage() {
+  const navigate = useNavigate();
+  const { signUp, handleOAuthLogin } = useAuth();
+
   const [fullName, setFullName] = useState("");
   const [phone, setPhone] = useState("");
   const [email, setEmail] = useState("");
@@ -22,35 +24,31 @@ export default function SignupPage() {
   const [acceptedTerms, setAcceptedTerms] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [fieldErrors, setFieldErrors] = useState<{ [key: string]: string }>({});
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [emailConfirmSent, setEmailConfirmSent] = useState(false);
 
-  const { signUp } = useAuth();
-  const navigate = useNavigate();
-
-  // Password strength logic (unchanged)
+  /** --- Password strength meter --- */
   const getPasswordStrength = (pwd: string) => {
-    let strength = 0;
-    if (pwd.length >= 8) strength += 1;
-    if (/[A-Z]/.test(pwd)) strength += 1;
-    if (/[a-z]/.test(pwd)) strength += 1;
-    if (/[0-9]/.test(pwd)) strength += 1;
-    if (/[^A-Za-z0-9]/.test(pwd)) strength += 1;
+    let score = 0;
+    if (pwd.length >= 8) score += 1;
+    if (/[A-Z]/.test(pwd)) score += 1;
+    if (/[a-z]/.test(pwd)) score += 1;
+    if (/[0-9]/.test(pwd)) score += 1;
+    if (/[^A-Za-z0-9]/.test(pwd)) score += 1;
 
-    if (strength <= 2) return { score: 1, text: "Weak", color: "bg-red-500" };
-    if (strength === 3) return { score: 2, text: "Fair", color: "bg-orange-500" };
-    if (strength === 4) return { score: 3, text: "Good", color: "bg-yellow-500" };
+    if (score <= 2) return { score: 1, text: "Weak", color: "bg-red-500" };
+    if (score === 3) return { score: 2, text: "Fair", color: "bg-orange-500" };
+    if (score === 4) return { score: 3, text: "Good", color: "bg-yellow-500" };
     return { score: 4, text: "Strong", color: "bg-green-500" };
   };
 
   const passwordStrength = getPasswordStrength(password);
   const passwordStrengthWidth = `${(passwordStrength.score / 4) * 100}%`;
 
-  // Form validation (unchanged)
+  /** --- Form validation --- */
   const validateForm = () => {
-    const errors: { [key: string]: string } = {};
+    const errors: Record<string, string> = {};
 
     if (!fullName.trim()) errors.fullName = "Full name is required";
     if (!email.trim()) errors.email = "Email is required";
@@ -58,7 +56,7 @@ export default function SignupPage() {
 
     const phoneClean = phone.replace(/\s+/g, "");
     if (phoneClean && !/^(?:0|\+27)[1-9][0-9]{8}$/.test(phoneClean)) {
-      errors.phone = "Please enter a valid South African phone number";
+      errors.phone = "Enter a valid South African phone number";
     }
 
     if (password.length < 8) errors.password = "Password must be at least 8 characters";
@@ -70,73 +68,51 @@ export default function SignupPage() {
     return Object.keys(errors).length === 0;
   };
 
+  /** --- Email signup handler --- */
   const handleEmailSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!validateForm()) return;
 
-    setError(null);
     setLoading(true);
-
     try {
-      const { error: signUpError } = await signUp({
+      const { error } = await signUp({
         email: email.trim(),
         password: password.trim(),
         full_name: fullName.trim(),
         phone: phone.trim() || null,
         role,
       });
+      if (error) throw error;
 
-      if (signUpError) throw signUpError;
-
-      // If backend requires email confirmation
       setEmailConfirmSent(true);
       toast.info("Check your email for confirmation link");
     } catch (err: any) {
-      const message = err.message || "Failed to create account";
-      setError(message);
-      toast.error(message);
+      toast.error(err.message || "Failed to create account");
     } finally {
       setLoading(false);
     }
   };
 
+  /** --- OAuth login handler --- */
   const handleOAuthSignIn = async (provider: "google" | "facebook") => {
-    setError(null);
     setLoading(true);
-
     try {
       const res = await fetch(`/api/auth/oauth/${provider}`, {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          redirectTo: `${window.location.origin}/dashboard`,
-        }),
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ redirectTo: `${window.location.origin}/dashboard` }),
       });
-
       const data = await res.json();
+      if (!res.ok) throw new Error(data.error || "OAuth signup failed");
 
-      if (!res.ok) {
-        throw new Error(data.error || `Failed to initiate ${provider} signup`);
-      }
-
-      // If backend returns redirect URL (OAuth flow)
-      if (data.redirectUrl) {
-        window.location.href = data.redirectUrl;
-        return;
-      }
-
-      toast.info("Redirecting to OAuth provider...");
+      if (data.redirectUrl) window.location.href = data.redirectUrl;
+      else toast.info("Redirecting to OAuth provider...");
     } catch (err: any) {
-      const message = err.message || "OAuth signup failed";
-      setError(message);
-      toast.error(message);
-    } finally {
-      setLoading(false);
-    }
+      toast.error(err.message || "OAuth signup failed");
+    } finally { setLoading(false); }
   };
 
+  /** --- Email confirmation sent UI --- */
   if (emailConfirmSent) {
     return (
       <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
@@ -157,12 +133,10 @@ export default function SignupPage() {
                     headers: { "Content-Type": "application/json" },
                     body: JSON.stringify({ email: email.trim() }),
                   });
-
                   if (!res.ok) {
                     const data = await res.json();
                     throw new Error(data.error || "Failed to resend");
                   }
-
                   toast.success("Confirmation email resent!");
                 } catch (err: any) {
                   toast.error(err.message || "Failed to resend email");
@@ -171,7 +145,7 @@ export default function SignupPage() {
               className="bg-blue-600 hover:bg-blue-700 w-full"
               disabled={loading}
             >
-              {loading ? <Loader2 className="mr-2 h-4 w-4 animate-spin" /> : null}
+              {loading && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
               Resend Confirmation Email
             </Button>
             <Button variant="outline" onClick={() => navigate("/login")} className="w-full">
@@ -183,6 +157,7 @@ export default function SignupPage() {
     );
   }
 
+  /** --- Signup form UI --- */
   return (
     <div className="min-h-screen flex items-center justify-center bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 p-4">
       <Card className="w-full max-w-md border-slate-800 bg-slate-900/70 backdrop-blur-md shadow-2xl">
@@ -197,241 +172,148 @@ export default function SignupPage() {
         </CardHeader>
 
         <CardContent className="space-y-5">
-          {error && (
-            <div className="bg-red-900/40 border border-red-700 text-red-200 px-4 py-3 rounded-md text-center">
-              {error}
-            </div>
-          )}
-
           {/* Full Name */}
           <div className="space-y-2">
-            <Label htmlFor="fullName" className="text-slate-200">
-              Full Name <span className="text-red-400">*</span>
-            </Label>
+            <Label htmlFor="fullName" className="text-slate-200">Full Name <span className="text-red-400">*</span></Label>
             <div className="relative">
               <User className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
               <Input
                 id="fullName"
-                autoComplete="name"
                 placeholder="John Doe"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                className={`pl-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${
-                  fieldErrors.fullName ? "border-red-500" : ""
-                }`}
+                className={`pl-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${fieldErrors.fullName ? "border-red-500" : ""}`}
               />
             </div>
-            {fieldErrors.fullName && <p className="text-red-400 text-xs mt-1">{fieldErrors.fullName}</p>}
+            {fieldErrors.fullName && <p className="text-red-400 text-xs">{fieldErrors.fullName}</p>}
           </div>
 
-          {/* Cell Number */}
+          {/* Phone */}
           <div className="space-y-2">
             <Label htmlFor="phone" className="text-slate-200">Cell Number (optional)</Label>
             <div className="relative">
               <Phone className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
               <Input
                 id="phone"
-                autoComplete="tel"
                 placeholder="082 123 4567"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                className={`pl-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${
-                  fieldErrors.phone ? "border-red-500" : ""
-                }`}
+                className={`pl-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${fieldErrors.phone ? "border-red-500" : ""}`}
               />
             </div>
-            {fieldErrors.phone && <p className="text-red-400 text-xs mt-1">{fieldErrors.phone}</p>}
+            {fieldErrors.phone && <p className="text-red-400 text-xs">{fieldErrors.phone}</p>}
           </div>
 
           {/* Email */}
           <div className="space-y-2">
-            <Label htmlFor="email" className="text-slate-200">
-              Email Address <span className="text-red-400">*</span>
-            </Label>
+            <Label htmlFor="email" className="text-slate-200">Email Address <span className="text-red-400">*</span></Label>
             <div className="relative">
               <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
               <Input
                 id="email"
                 type="email"
-                autoComplete="email"
                 placeholder="name@example.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className={`pl-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${
-                  fieldErrors.email ? "border-red-500" : ""
-                }`}
+                className={`pl-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${fieldErrors.email ? "border-red-500" : ""}`}
               />
             </div>
-            {fieldErrors.email && <p className="text-red-400 text-xs mt-1">{fieldErrors.email}</p>}
+            {fieldErrors.email && <p className="text-red-400 text-xs">{fieldErrors.email}</p>}
           </div>
 
-          {/* Role Selection */}
+          {/* Role */}
           <div className="space-y-2">
             <Label className="text-slate-200">I want to...</Label>
             <div className="grid grid-cols-2 gap-4">
-              <label className={`flex flex-col items-center p-4 border rounded-lg cursor-pointer transition-colors ${
-                role === "buyer" ? "border-blue-500 bg-blue-950/30" : "border-slate-700 hover:border-slate-500"
-              }`}>
-                <input
-                  type="radio"
-                  name="role"
-                  value="buyer"
-                  checked={role === "buyer"}
-                  onChange={() => setRole("buyer")}
-                  className="sr-only"
-                />
-                <span className="text-lg font-medium">Find Help</span>
-                <span className="text-sm text-slate-400">I'm looking for assistants</span>
-              </label>
-
-              <label className={`flex flex-col items-center p-4 border rounded-lg cursor-pointer transition-colors ${
-                role === "seller" ? "border-blue-500 bg-blue-950/30" : "border-slate-700 hover:border-slate-500"
-              }`}>
-                <input
-                  type="radio"
-                  name="role"
-                  value="seller"
-                  checked={role === "seller"}
-                  onChange={() => setRole("seller")}
-                  className="sr-only"
-                />
-                <span className="text-lg font-medium">Offer Services</span>
-                <span className="text-sm text-slate-400">I want to provide assistance</span>
-              </label>
+              {["buyer", "seller"].map((r) => (
+                <label
+                  key={r}
+                  className={`flex flex-col items-center p-4 border rounded-lg cursor-pointer transition-colors ${
+                    role === r ? "border-blue-500 bg-blue-950/30" : "border-slate-700 hover:border-slate-500"
+                  }`}
+                >
+                  <input type="radio" name="role" value={r} checked={role === r} onChange={() => setRole(r as any)} className="sr-only" />
+                  <span className="text-lg font-medium">{r === "buyer" ? "Find Help" : "Offer Services"}</span>
+                  <span className="text-sm text-slate-400">{r === "buyer" ? "I'm looking for assistants" : "I want to provide assistance"}</span>
+                </label>
+              ))}
             </div>
           </div>
 
           {/* Password */}
           <div className="space-y-2">
-            <Label htmlFor="password" className="text-slate-200">
-              Password <span className="text-red-400">*</span>
-            </Label>
+            <Label htmlFor="password" className="text-slate-200">Password <span className="text-red-400">*</span></Label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
               <Input
                 id="password"
                 type={showPassword ? "text" : "password"}
-                autoComplete="new-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
-                className={`pl-11 pr-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${
-                  fieldErrors.password ? "border-red-500" : ""
-                }`}
+                className={`pl-11 pr-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${fieldErrors.password ? "border-red-500" : ""}`}
               />
-              <button
-                type="button"
-                onClick={() => setShowPassword(!showPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-              >
+              <button type="button" onClick={() => setShowPassword(!showPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
                 {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
             </div>
-            {fieldErrors.password && <p className="text-red-400 text-xs mt-1">{fieldErrors.password}</p>}
+            {fieldErrors.password && <p className="text-red-400 text-xs">{fieldErrors.password}</p>}
 
-            {/* Password Strength Meter */}
             {password && (
               <div className="mt-2">
                 <div className="h-2 bg-slate-700 rounded-full overflow-hidden">
-                  <div
-                    className={`h-full transition-all duration-300 ${passwordStrength.color}`}
-                    style={{ width: passwordStrengthWidth }}
-                  />
+                  <div className={`h-full transition-all duration-300 ${passwordStrength.color}`} style={{ width: passwordStrengthWidth }} />
                 </div>
-                <p className={`text-xs mt-1 ${passwordStrength.color.replace("bg-", "text-")}`}>
-                  Password strength: {passwordStrength.text}
-                </p>
+                <p className={`text-xs mt-1 ${passwordStrength.color.replace("bg-", "text-")}`}>Password strength: {passwordStrength.text}</p>
               </div>
             )}
           </div>
 
           {/* Confirm Password */}
           <div className="space-y-2">
-            <Label htmlFor="confirm-password" className="text-slate-200">
-              Confirm Password <span className="text-red-400">*</span>
-            </Label>
+            <Label htmlFor="confirm-password" className="text-slate-200">Confirm Password <span className="text-red-400">*</span></Label>
             <div className="relative">
               <Lock className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
               <Input
                 id="confirm-password"
                 type={showConfirmPassword ? "text" : "password"}
-                autoComplete="new-password"
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
-                className={`pl-11 pr-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${
-                  fieldErrors.confirmPassword ? "border-red-500" : ""
-                }`}
+                className={`pl-11 pr-11 bg-slate-800 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 ${fieldErrors.confirmPassword ? "border-red-500" : ""}`}
               />
-              <button
-                type="button"
-                onClick={() => setShowConfirmPassword(!showConfirmPassword)}
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
-              >
+              <button type="button" onClick={() => setShowConfirmPassword(!showConfirmPassword)} className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white">
                 {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
             </div>
-            {fieldErrors.confirmPassword && (
-              <p className="text-red-400 text-xs">{fieldErrors.confirmPassword}</p>
-            )}
+            {fieldErrors.confirmPassword && <p className="text-red-400 text-xs">{fieldErrors.confirmPassword}</p>}
           </div>
 
-          {/* Terms & Privacy */}
+          {/* Terms */}
           <div className="flex items-start space-x-2">
-            <Checkbox
-              id="terms"
-              checked={acceptedTerms}
-              onCheckedChange={(checked) => setAcceptedTerms(!!checked)}
-              className="border-slate-600 data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600"
-            />
+            <Checkbox id="terms" checked={acceptedTerms} onCheckedChange={(c) => setAcceptedTerms(!!c)} className="border-slate-600 data-[state=checked]:bg-blue-600 data-[state=checked]:border-blue-600" />
             <div className="grid gap-0.5 leading-none">
-              <Label
-                htmlFor="terms"
-                className="text-sm text-slate-300 cursor-pointer"
-              >
-                I accept the{" "}
-                <a href="/terms" className="text-blue-400 hover:underline" target="_blank">
-                  Terms of Service
-                </a>{" "}
-                and{" "}
-                <a href="/privacy" className="text-blue-400 hover:underline" target="_blank">
-                  Privacy Policy
-                </a>
+              <Label htmlFor="terms" className="text-sm text-slate-300 cursor-pointer">
+                I accept the <a href="/terms" target="_blank" className="text-blue-400 hover:underline">Terms of Service</a> and <a href="/privacy" target="_blank" className="text-blue-400 hover:underline">Privacy Policy</a>
               </Label>
               {fieldErrors.terms && <p className="text-red-400 text-xs">{fieldErrors.terms}</p>}
             </div>
           </div>
 
-          <Button
-            onClick={handleEmailSignup}
-            disabled={loading || !acceptedTerms}
-            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-6 text-lg disabled:opacity-50"
-          >
+          <Button onClick={handleEmailSignup} disabled={loading || !acceptedTerms} className="w-full bg-blue-600 hover:bg-blue-700 text-white font-medium py-6 text-lg disabled:opacity-50">
             {loading ? "Creating..." : "Create Account"}
           </Button>
 
+          {/* OAuth */}
           <div className="relative my-6">
             <Separator className="bg-slate-700" />
             <div className="absolute inset-0 flex items-center justify-center">
-              <span className="bg-slate-900 px-4 text-xs text-slate-500 uppercase tracking-wider">
-                or continue with
-              </span>
+              <span className="bg-slate-900 px-4 text-xs text-slate-500 uppercase tracking-wider">or continue with</span>
             </div>
           </div>
-
           <div className="grid grid-cols-2 gap-4">
-            <Button
-              variant="outline"
-              onClick={() => handleOAuthSignIn("facebook")}
-              disabled={loading}
-              className="border-slate-700 text-white hover:bg-slate-800"
-            >
+            <Button variant="outline" onClick={() => handleOAuthSignIn("facebook")} disabled={loading} className="border-slate-700 text-white hover:bg-slate-800">
               <Facebook className="mr-2 h-5 w-5" /> Facebook
             </Button>
-            <Button
-              variant="outline"
-              onClick={() => handleOAuthSignIn("google")}
-              disabled={loading}
-              className="border-slate-700 text-white hover:bg-slate-800"
-            >
+            <Button variant="outline" onClick={() => handleOAuthSignIn("google")} disabled={loading} className="border-slate-700 text-white hover:bg-slate-800">
               <Chrome className="mr-2 h-5 w-5" /> Google
             </Button>
           </div>

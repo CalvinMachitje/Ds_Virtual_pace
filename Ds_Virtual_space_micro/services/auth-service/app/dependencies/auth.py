@@ -4,7 +4,7 @@ from fastapi.security import OAuth2PasswordBearer
 from jose import JWTError
 import jwt
 from app.core.config import settings
-from utils.redis_utils import safe_redis_call
+from app.utils.redis_utils import safe_redis_call
 
 
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/api/auth/login")
@@ -18,14 +18,14 @@ async def get_current_user(token: str = Depends(oauth2_scheme)):
     )
     try:
         payload = jwt.decode(token, settings.JWT_SECRET_KEY, algorithms=["HS256"])
-        user_id: str = payload.get("sub")
-        if user_id is None:
-            raise credentials_exception
+
+        if payload.get("type") != "access":
+            raise HTTPException(status_code=401, detail="Invalid token type")
 
         jti = payload.get("jti")
         if safe_redis_call("get", f"blacklist:{jti}") == "true":
             raise HTTPException(status_code=401, detail="Token has been revoked")
 
-        return user_id
+        return payload.get("sub")
     except JWTError:
         raise credentials_exception

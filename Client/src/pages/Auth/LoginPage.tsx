@@ -1,18 +1,19 @@
-// src/pages/Auth/LoginPage.tsx
+// Client/src/pages/Auth/LoginPage.tsx
 import { useState } from "react";
-import { useNavigate } from "react-router-dom";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Separator } from "@/components/ui/separator";
-import { Mail, Lock, Eye, EyeOff, ArrowLeft, Facebook, Chrome, Users, Loader2 } from "lucide-react";
-import { Link } from "react-router-dom";
+import { useNavigate, Link } from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "sonner";
-import { API_BASE_URL } from "@/lib/api";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { Mail, Lock, Eye, EyeOff, ArrowLeft, Facebook, Chrome, Users, Loader2 } from "lucide-react";
 
 export default function LoginPage() {
+  const navigate = useNavigate();
+  const { signIn } = useAuth();
+
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -20,65 +21,49 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false);
   const [oauthLoading, setOauthLoading] = useState<"google" | "facebook" | null>(null);
 
-  const { signIn } = useAuth();
-  const navigate = useNavigate();
-
+  /** --- EMAIL LOGIN --- */
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setLoading(true);
 
     if (!email.trim() || !password.trim()) {
-      setError("Please fill in both email and password");
-      setLoading(false);
+      setError("Please enter both email and password");
       return;
     }
 
+    setLoading(true);
     try {
       const { error: signInError } = await signIn(email.trim(), password.trim());
-
-      if (signInError) {
-        throw signInError;
-      }
+      if (signInError) throw signInError;
 
       toast.success("Logged in successfully");
       navigate("/dashboard");
     } catch (err: any) {
-      const message = err.message || "Login failed. Please check your credentials.";
-      setError(message);
-      toast.error(message);
+      const msg = err?.message || "Login failed. Check credentials.";
+      setError(msg);
+      toast.error(msg);
     } finally {
       setLoading(false);
     }
   };
 
+  /** --- OAUTH LOGIN --- */
   const handleOAuthSignIn = async (provider: "google" | "facebook") => {
     setError(null);
     setOauthLoading(provider);
 
     try {
-      const res = await fetch(`${API_BASE_URL}/api/auth/oauth/${provider}`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          redirect_to: `${window.location.origin}/oauth/callback`,
-        }),
-      });
+      // ✅ Use GET /start to avoid 405 errors
+      const res = await fetch(`/api/auth/oauth/${provider}/start`);
+      if (!res.ok) throw new Error("Failed to get OAuth URL");
 
-      const data = await res.json();
+      const data: { oauth_url: string; success: boolean } = await res.json();
+      if (!data.success || !data.oauth_url) throw new Error("Invalid OAuth URL returned");
 
-      if (!res.ok) {
-        throw new Error(data.error || data.message || `Failed to start ${provider} login`);
-      }
-
-      if (!data.oauth_url) {
-        throw new Error("No OAuth URL returned from server");
-      }
-
-      // Redirect to provider's login page
+      // Redirect user to Supabase OAuth
       window.location.href = data.oauth_url;
     } catch (err: any) {
-      toast.error(err.message || `${provider.charAt(0).toUpperCase() + provider.slice(1)} login failed`);
+      toast.error(err.message || `${provider[0].toUpperCase() + provider.slice(1)} login failed`);
       setError(err.message);
     } finally {
       setOauthLoading(null);
@@ -92,11 +77,13 @@ export default function LoginPage() {
           <Link to="/" className="absolute left-4 top-4 text-slate-400 hover:text-white transition-colors">
             <ArrowLeft className="h-6 w-6" />
           </Link>
+
           <div className="flex justify-center mb-4">
             <div className="p-4 bg-blue-600/20 rounded-full">
               <Users className="h-12 w-12 text-blue-500" />
             </div>
           </div>
+
           <CardTitle className="text-3xl font-bold text-white">D's Virtual Space</CardTitle>
           <CardDescription className="text-slate-400">Access your personal team</CardDescription>
         </CardHeader>
@@ -108,16 +95,16 @@ export default function LoginPage() {
             </div>
           )}
 
-          {/* Email & Password */}
           <form onSubmit={handleLogin} className="space-y-5">
+            {/* Email */}
             <div className="space-y-2">
               <Label htmlFor="email" className="text-slate-200">Email Address</Label>
               <div className="relative">
                 <Mail className="absolute left-3 top-1/2 -translate-y-1/2 h-5 w-5 text-slate-400" />
                 <Input
                   id="email"
-                  placeholder="name@example.com"
                   type="email"
+                  placeholder="name@example.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="pl-11 bg-slate-800/60 border-slate-700 text-white placeholder:text-slate-500 focus:ring-blue-500 focus:border-blue-500"
@@ -126,6 +113,7 @@ export default function LoginPage() {
               </div>
             </div>
 
+            {/* Password */}
             <div className="space-y-2">
               <Label htmlFor="password" className="text-slate-200">Password</Label>
               <div className="relative">
@@ -171,6 +159,7 @@ export default function LoginPage() {
             </Button>
           </form>
 
+          {/* OAuth */}
           <div className="relative my-6">
             <Separator className="bg-slate-700" />
             <div className="absolute inset-0 flex items-center justify-center">
@@ -179,34 +168,25 @@ export default function LoginPage() {
               </span>
             </div>
           </div>
-
           <div className="grid grid-cols-2 gap-4">
-            <Button
-              variant="outline"
-              onClick={() => handleOAuthSignIn("google")}
-              disabled={oauthLoading !== null}
-              className="border-slate-700 text-white hover:bg-slate-800 relative"
-            >
-              {oauthLoading === "google" ? (
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              ) : (
-                <Chrome className="mr-2 h-5 w-5" />
-              )}
-              Google
-            </Button>
-
             <Button
               variant="outline"
               onClick={() => handleOAuthSignIn("facebook")}
               disabled={oauthLoading !== null}
               className="border-slate-700 text-white hover:bg-slate-800 relative"
             >
-              {oauthLoading === "facebook" ? (
-                <Loader2 className="mr-2 h-5 w-5 animate-spin" />
-              ) : (
-                <Facebook className="mr-2 h-5 w-5" />
-              )}
+              {oauthLoading === "facebook" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Facebook className="mr-2 h-5 w-5" />}
               Facebook
+            </Button>
+
+            <Button
+              variant="outline"
+              onClick={() => handleOAuthSignIn("google")}
+              disabled={oauthLoading !== null}
+              className="border-slate-700 text-white hover:bg-slate-800 relative"
+            >
+              {oauthLoading === "google" ? <Loader2 className="mr-2 h-5 w-5 animate-spin" /> : <Chrome className="mr-2 h-5 w-5" />}
+              Google
             </Button>
           </div>
         </CardContent>

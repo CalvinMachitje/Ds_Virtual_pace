@@ -80,7 +80,7 @@ class SupabaseService:
     def check_connection(self) -> Dict[str, Any]:
         result = {"supabase": "unknown", "redis": "unknown"}
         try:
-            self.safe_execute(lambda: self.client.table("profiles").select("count(*)", count="exact").limit(1))
+            self.safe_execute(lambda: self.client.table("profiles").select("*", count="exact").limit(1))
             result["supabase"] = "ok"
         except Exception as e:
             logger.error(f"Supabase connection check failed: {str(e)}")

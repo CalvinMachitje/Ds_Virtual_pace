@@ -1,66 +1,66 @@
-// src/pages/shared/ResetPassword.tsx
+// src/pages/Auth/ResetPasswordPage.tsx
 import { useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { useNavigate, useLocation, Link } from "react-router-dom";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardDescription, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import { Lock, Eye, EyeOff, Link } from "lucide-react";
-import { toast } from "sonner";
+import { Card, CardHeader, CardTitle, CardDescription, CardContent, CardFooter } from "@/components/ui/card";
+import { Lock, Eye, EyeOff } from "lucide-react";
+import { API_BASE_URL } from "@/lib/api";
 
-export default function ResetPassword() {
+export default function ResetPasswordPage() {
+  const navigate = useNavigate();
+  const location = useLocation();
+  const token = new URLSearchParams(location.search).get("token") || "";
+
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-  const [success, setSuccess] = useState(false);
   const [loading, setLoading] = useState(false);
-
-  const navigate = useNavigate();
-  const location = useLocation();
-  const searchParams = new URLSearchParams(location.search);
-  const token = searchParams.get("token");
+  const [success, setSuccess] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const handleReset = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setLoading(true);
+
+    if (!password || !confirmPassword) {
+      setError("Please fill in both password fields");
+      return;
+    }
 
     if (password !== confirmPassword) {
       setError("Passwords do not match");
-      setLoading(false);
       return;
     }
 
     if (password.length < 8) {
       setError("Password must be at least 8 characters");
-      setLoading(false);
       return;
     }
 
     if (!token) {
       setError("Invalid or missing reset token");
-      setLoading(false);
       return;
     }
 
+    setLoading(true);
     try {
-      const res = await fetch("/api/auth/reset-password", {
+      const res = await fetch(`${API_BASE_URL}/api/auth/reset-password`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ token, password }),
       });
 
-      if (!res.ok) {
-        const err = await res.json();
-        throw new Error(err.error || "Failed to reset password");
-      }
+      const data = await res.json();
+      if (!res.ok) throw new Error(data?.error || "Failed to reset password");
 
       setSuccess(true);
       toast.success("Password reset successful! You can now log in.");
     } catch (err: any) {
-      setError(err.message || "Something went wrong");
+      setError(err.message || "Failed to reset password");
       toast.error(err.message || "Failed to reset password");
     } finally {
       setLoading(false);
@@ -104,6 +104,7 @@ export default function ResetPassword() {
             </div>
           )}
 
+          {/* New Password */}
           <div className="space-y-2">
             <Label htmlFor="password" className="text-slate-200">New Password</Label>
             <div className="relative">
@@ -114,17 +115,20 @@ export default function ResetPassword() {
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 className="pl-11 pr-11 bg-slate-800/60 border-slate-700 text-white focus:ring-blue-500"
+                disabled={loading}
               />
               <button
                 type="button"
                 onClick={() => setShowPassword(!showPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                disabled={loading}
               >
                 {showPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
             </div>
           </div>
 
+          {/* Confirm Password */}
           <div className="space-y-2">
             <Label htmlFor="confirm-password" className="text-slate-200">Confirm Password</Label>
             <div className="relative">
@@ -135,11 +139,13 @@ export default function ResetPassword() {
                 value={confirmPassword}
                 onChange={(e) => setConfirmPassword(e.target.value)}
                 className="pl-11 pr-11 bg-slate-800/60 border-slate-700 text-white focus:ring-blue-500"
+                disabled={loading}
               />
               <button
                 type="button"
                 onClick={() => setShowConfirmPassword(!showConfirmPassword)}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-white"
+                disabled={loading}
               >
                 {showConfirmPassword ? <EyeOff className="h-5 w-5" /> : <Eye className="h-5 w-5" />}
               </button>
