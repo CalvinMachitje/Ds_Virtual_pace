@@ -102,10 +102,10 @@ def create_app() -> Flask:
     # ─────────────────────────────────────
     # Blueprints
     # ─────────────────────────────────────
-    from app.routes.auth.routes import bp as routes_bp
-    from app.routes.auth.oauth import bp as oauth_bp
-    from app.routes.auth.twofa import bp as twofa_bp
-    from app.routes.auth.admin import bp as admin_bp
+    from routes.routes import bp as routes_bp
+    from routes.oauth import bp as oauth_bp
+    from routes.twofa import bp as twofa_bp
+    from routes.admin import bp as admin_bp
 
     # Mount all auth routes under /api/auth
     app.register_blueprint(routes_bp, url_prefix="/api/auth")
